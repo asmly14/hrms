@@ -1,0 +1,78 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* Warm neutral (stone) base + amber accent — MY HRMS design language */
+    --background: 36 33% 97%;
+    --foreground: 25 20% 14%;
+    --card: 0 0% 100%;
+    --card-foreground: 25 20% 14%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 25 20% 14%;
+    --primary: 32 85% 38%;
+    --primary-foreground: 40 40% 98%;
+    --secondary: 32 16% 92%;
+    --secondary-foreground: 28 25% 20%;
+    --muted: 34 18% 93%;
+    --muted-foreground: 28 10% 42%;
+    --accent: 38 55% 90%;
+    --accent-foreground: 30 45% 24%;
+    --destructive: 8 72% 46%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 30 14% 87%;
+    --input: 30 14% 87%;
+    --ring: 32 85% 38%;
+    --radius: 0.75rem;
+    --sidebar-background: 38 24% 95%;
+    --sidebar-foreground: 28 12% 34%;
+    --sidebar-primary: 32 85% 38%;
+    --sidebar-primary-foreground: 40 40% 98%;
+    --sidebar-accent: 38 55% 90%;
+    --sidebar-accent-foreground: 30 45% 24%;
+    --sidebar-border: 30 14% 87%;
+    --sidebar-ring: 32 85% 38%;
+  }
+
+  .dark {
+    --background: 26 12% 9%;
+    --foreground: 36 20% 92%;
+    --card: 26 12% 12%;
+    --card-foreground: 36 20% 92%;
+    --popover: 26 12% 12%;
+    --popover-foreground: 36 20% 92%;
+    --primary: 38 80% 55%;
+    --primary-foreground: 28 30% 10%;
+    --secondary: 26 10% 18%;
+    --secondary-foreground: 36 20% 90%;
+    --muted: 26 10% 17%;
+    --muted-foreground: 32 10% 62%;
+    --accent: 30 20% 20%;
+    --accent-foreground: 40 60% 80%;
+    --destructive: 6 60% 42%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 26 10% 20%;
+    --input: 26 10% 20%;
+    --ring: 38 80% 55%;
+    --sidebar-background: 27 14% 11%;
+    --sidebar-foreground: 34 14% 78%;
+    --sidebar-primary: 38 80% 55%;
+    --sidebar-primary-foreground: 28 30% 10%;
+    --sidebar-accent: 30 20% 20%;
+    --sidebar-accent-foreground: 40 60% 80%;
+    --sidebar-border: 26 10% 20%;
+    --sidebar-ring: 38 80% 55%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-family: 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+    font-feature-settings: 'cv02', 'cv03', 'cv04', 'tnum';
+  }
+}
