@@ -9,10 +9,12 @@
  * render the per-employee succeeded/skipped summary.
  */
 import { useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   CalendarClock,
   DoorOpen,
   FileSignature,
+  FolderOpen,
   HandCoins,
   Loader2,
   MoreHorizontal,
@@ -755,6 +757,7 @@ export function SeparationMenu({
   onCompleted,
   align = 'end',
 }: SeparationMenuProps) {
+  const navigate = useNavigate();
   const [dialog, setDialog] = useState<DialogKind | null>(null);
   const allResigned = targets.every((t) => t.status === 'resigned');
   const completed = () => onCompleted?.();
@@ -782,6 +785,14 @@ export function SeparationMenu({
             {targets.length === 1 ? targets[0]!.name : `${targets.length} selected`}
           </DropdownMenuLabel>
           <DropdownMenuSeparator />
+          {targets.length === 1 && (
+            <>
+              <DropdownMenuItem onSelect={() => navigate(`/employees/${targets[0]!.id}/records`)}>
+                <FolderOpen className="mr-2 h-4 w-4" /> Records
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+            </>
+          )}
           <DropdownMenuItem disabled={allResigned} onSelect={() => setDialog('resign')}>
             <UserMinus className="mr-2 h-4 w-4" /> Resign…
           </DropdownMenuItem>

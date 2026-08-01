@@ -34,6 +34,9 @@ import SuperAdminPage from '@/pages/superadmin/SuperAdminPage';
 import OrgPage from '@/pages/org/OrgPage';
 import OrgChartPage from '@/pages/org/OrgChartPage';
 import CompanyPage from '@/pages/company/CompanyPage';
+import { ContractsPage } from '@/pages/contracts/meta';
+import { EmployeeRecordsPage } from '@/pages/employees/records/meta';
+import { OnboardFormPage } from '@/pages/onboard/meta';
 import { isModuleEnabled, MODULE_DEFS } from '@/pages/company/modules';
 
 const NotFound = lazy(() => import('@/pages/NotFound'));
@@ -64,6 +67,13 @@ export const routeRegistry: RouteDef[] = [
   { path: '/', title: 'Dashboard', element: <DashboardPage /> },
   { path: '/employees', title: 'Employees', element: <EmployeesPage />, roles: ['Admin', 'HR'] },
   { path: '/employees/:id', title: 'Employee Detail', element: <EmployeeDetailPage /> },
+  // All roles may open the route — the records page self-gates (Employee →
+  // redirect to own detail, Manager → read-only own department, salary tab
+  // and print-outs Admin/HR only).
+  { path: '/employees/:id/records', title: 'Employee Records', element: <EmployeeRecordsPage /> },
+  // Contracts is not a toggleable module (no ModuleKey in enabledModules) —
+  // always-on for Admin/HR.
+  { path: '/contracts', title: 'Contracts', element: <ContractsPage />, roles: ['Admin', 'HR'] },
   { path: '/org', title: 'Organization', element: <OrgPage />, roles: ['Admin', 'HR'] },
   { path: '/org/chart', title: 'Org Chart', element: <OrgChartPage />, roles: ['Admin', 'HR'] },
   { path: '/attendance', title: 'Attendance', element: <AttendancePage />, module: 'attendance' },
@@ -173,6 +183,9 @@ export default function App() {
       <AuthProvider>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
+          {/* Public applicant onboarding form — resolves company/branding from
+              the invite token itself; must stay OUTSIDE RequireAuth. */}
+          <Route path="/onboard/:token" element={<OnboardFormPage />} />
           <Route element={<RequireAuth />}>
             <Route element={<AppLayout />}>
               {routeRegistry.map((r) => (

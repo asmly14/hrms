@@ -4,7 +4,7 @@
  * tracking, pre-boarding document requirements, welcome packet stub.
  */
 import { useEffect, useMemo, useState } from 'react';
-import { ClipboardCheck, FileText, Gift, Plus, UserPlus, Users } from 'lucide-react';
+import { ClipboardCheck, FileText, Gift, Link2, Plus, UserPlus, Users } from 'lucide-react';
 import type { Employee } from '@/lib/types';
 import { useCollection } from '@/lib/db';
 import { useAuth } from '@/lib/authContext';
@@ -16,6 +16,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import ChecklistCard from './ChecklistCard';
 import NewChecklistDialog from './NewChecklistDialog';
+import InviteLinksPanel from './InviteLinksPanel';
 
 const PREBOARDING_DOCS = [
   { label: 'NRIC / passport copy', note: 'Identity & statutory registration' },
@@ -32,6 +33,7 @@ export default function OnboardingPage() {
   const { items: employees } = useCollection<Employee>('employees');
   const { items: checklists } = useOnboardingChecklists();
 
+  const [view, setView] = useState<'checklists' | 'links'>('checklists');
   const [tab, setTab] = useState<'active' | 'completed' | 'all'>('active');
   const [dialogOpen, setDialogOpen] = useState(false);
 
@@ -103,11 +105,29 @@ export default function OnboardingPage() {
             Pre-boarding documents, first-weeks checklists and buddy tracking for new hires.
           </p>
         </div>
-        <Button onClick={() => setDialogOpen(true)} className="bg-amber-600 text-white hover:bg-amber-700">
-          <Plus className="mr-1.5 h-4 w-4" /> Start onboarding
-        </Button>
+        {view === 'checklists' && (
+          <Button onClick={() => setDialogOpen(true)} className="bg-amber-600 text-white hover:bg-amber-700">
+            <Plus className="mr-1.5 h-4 w-4" /> Start onboarding
+          </Button>
+        )}
       </div>
 
+      {/* ── View switch: checklists vs self-service invite links ── */}
+      <Tabs value={view} onValueChange={(v) => setView(v as typeof view)}>
+        <TabsList>
+          <TabsTrigger value="checklists" className="gap-1.5">
+            <ClipboardCheck className="h-3.5 w-3.5" /> Checklists
+          </TabsTrigger>
+          <TabsTrigger value="links" className="gap-1.5">
+            <Link2 className="h-3.5 w-3.5" /> Invite links
+          </TabsTrigger>
+        </TabsList>
+      </Tabs>
+
+      {view === 'links' ? (
+        <InviteLinksPanel actorName={actorName} />
+      ) : (
+        <>
       {/* ── Stat strip ── */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
         <Card className="rounded-xl">
@@ -240,6 +260,8 @@ export default function OnboardingPage() {
           </CardContent>
         </Card>
       </div>
+        </>
+      )}
 
       <NewChecklistDialog
         open={dialogOpen}

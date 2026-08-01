@@ -6,6 +6,7 @@ import {
   BadgeCheck,
   CalendarDays,
   FileText,
+  FolderOpen,
   HeartPulse,
   Landmark,
   Pencil,
@@ -255,23 +256,31 @@ export default function EmployeeDetailPage() {
                 )}
               </div>
             </div>
-            {isHR && (
-              <div className="flex shrink-0 gap-2">
-                <Button variant="outline" onClick={() => setEditOpen(true)}>
-                  <Pencil className="mr-1.5 h-4 w-4" /> Edit
+            <div className="flex shrink-0 gap-2">
+              {/* Records link is visible to every role — the records page self-gates. */}
+              <Link to={`/employees/${emp.id}/records`}>
+                <Button variant="outline">
+                  <FolderOpen className="mr-1.5 h-4 w-4" /> Records
                 </Button>
-                <SeparationMenu
-                  targets={[emp]}
-                  actorName={actorName}
-                  onCompleted={onSeparationCompleted}
-                  trigger={
-                    <Button variant="outline">
-                      <UserMinus className="mr-1.5 h-4 w-4" /> Separation
-                    </Button>
-                  }
-                />
-              </div>
-            )}
+              </Link>
+              {isHR && (
+                <>
+                  <Button variant="outline" onClick={() => setEditOpen(true)}>
+                    <Pencil className="mr-1.5 h-4 w-4" /> Edit
+                  </Button>
+                  <SeparationMenu
+                    targets={[emp]}
+                    actorName={actorName}
+                    onCompleted={onSeparationCompleted}
+                    trigger={
+                      <Button variant="outline">
+                        <UserMinus className="mr-1.5 h-4 w-4" /> Separation
+                      </Button>
+                    }
+                  />
+                </>
+              )}
+            </div>
           </CardContent>
         </Card>
       </div>

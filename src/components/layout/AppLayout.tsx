@@ -7,7 +7,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import {
   Bell, Building2, Calendar, CalendarDays, ClipboardList, FileText, Gauge,
-  LayoutDashboard, LogOut, Moon, Network, Receipt, Search, Settings,
+  LayoutDashboard, LogOut, Moon, Network, Receipt, ScrollText, Search, Settings,
   ShieldCheck, Sun, TrendingUp, UserRound, UserRoundCheck, UserRoundMinus,
   Users, Wallet, Workflow,
 } from 'lucide-react';
@@ -49,6 +49,7 @@ export interface NavItem {
 export const NAV_ITEMS: NavItem[] = [
   { path: '/', title: 'Dashboard', icon: LayoutDashboard, roles: ['Admin', 'HR', 'Manager', 'Employee'] },
   { path: '/employees', title: 'Employees', icon: Users, roles: ['Admin', 'HR'] },
+  { path: '/contracts', title: 'Contracts', icon: ScrollText, roles: ['Admin', 'HR'] },
   { path: '/org', title: 'Organization', icon: Network, roles: ['Admin', 'HR'] },
   { path: '/org/chart', title: 'Org Chart', icon: Workflow, roles: ['Admin', 'HR'] },
   { path: '/attendance', title: 'Attendance', icon: Calendar, roles: ['Admin', 'HR', 'Manager', 'Employee'], module: 'attendance' },
