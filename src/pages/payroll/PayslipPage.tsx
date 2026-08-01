@@ -87,8 +87,10 @@ export default function PayslipPage() {
   const reimbursements = slip.lines.filter((l) => l.kind === 'earning' && l.nonStatutory);
   const deductions = slip.lines.filter((l) => l.kind === 'deduction');
   const employer = slip.lines.filter((l) => l.kind === 'employer');
+  const infoLines = slip.lines.filter((l) => l.kind === 'info');
   const totalDeductions = round2(
-    slip.epfEmployee + slip.socsoEmployee + slip.eisEmployee + slip.pcb + slip.unpaidLeaveDeduction,
+    slip.epfEmployee + slip.socsoEmployee + slip.eisEmployee + slip.pcb +
+    slip.unpaidLeaveDeduction + (slip.adjustmentDeductions ?? 0),
   );
   const employerTotal = round2(
     slip.epfEmployer + slip.socsoEmployer + slip.eisEmployer + slip.hrdLevy,
@@ -164,6 +166,12 @@ export default function PayslipPage() {
                 Overtime worked this wage period: {slip.otHours}h
               </p>
             )}
+            {/* Proration transparency: days worked + proration note when partial */}
+            {infoLines.map((l) => (
+              <p key={l.label} className="mt-0.5 text-xs text-muted-foreground print-text-muted">
+                {l.label}
+              </p>
+            ))}
             <table className="mt-2 w-full text-sm">
               <tbody>
                 {earnings.map((l) => (

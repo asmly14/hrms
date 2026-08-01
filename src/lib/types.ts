@@ -71,6 +71,14 @@ export interface OrgChartSettings {
 }
 
 /**
+ * Proration basis for mid-month joiners/leavers and unpaid-leave deductions.
+ *  - 'calendar'     — monthly ÷ calendar days of the month
+ *  - 'working-days' — monthly ÷ state-aware working days (excl. weekends + PH)
+ *  - 'fixed-26'     — monthly ÷ 26 (EA 1955 s.60I ordinary rate of pay)
+ */
+export type PayrollProrationMethod = 'calendar' | 'working-days' | 'fixed-26';
+
+/**
  * Per-company customization. Every field is optional at the storage layer so
  * older tenants keep working when new knobs are added; readers merge over
  * system defaults (see lib/appSettings.ts).
@@ -79,6 +87,9 @@ export interface CompanyConfig {
   workingWeek: WorkingWeek;
   /** Day of month (1–28) when attendance/OT/claims close for payroll. */
   payrollCutoffDay: number;
+  /** Proration basis for joiner/leaver pay and unpaid-leave deductions.
+   *  Optional for backwards compatibility — absent means 'calendar'. */
+  payrollProration?: PayrollProrationMethod;
   claimPolicy: CompanyClaimPolicyOverride;
   leaveTopUps: CompanyLeaveTopUps;
   enabledModules: ModuleKey[];
@@ -261,6 +272,10 @@ export interface PayrollRun {
   totalNet: number;
   totalEmployerCost: number;
   warnings: string[];     // e.g. below-minimum-wage, OT > 104h
+  /** Proration basis used for this run (absent on legacy runs = 'calendar'). */
+  prorationMethod?: PayrollProrationMethod;
+  /** ISO datetime when a draft run was finalized (absent while still draft). */
+  finalizedAt?: string;
 }
 
 export type PayslipLineKind = 'earning' | 'deduction' | 'employer' | 'info';
@@ -271,6 +286,23 @@ export interface PayslipLine {
   kind: PayslipLineKind;
   /** true = excluded from EPF/SOCSO/EIS/PCB wage bases (e.g. claim reimbursements). */
   nonStatutory?: boolean;
+}
+
+/** Preset ad-hoc adjustment types offered by the per-employee payslip editor. */
+export type AdjustmentPreset = 'cp38' | 'zakat' | 'ptptn' | 'custom';
+
+/**
+ * Ad-hoc per-payslip adjustment entered via the kakitangan-style editor before
+ * a run is finalized. Earnings join the gross (statutory wage bases: SOCSO/EIS
+ * + PCB additional remuneration; EPF/HRD base unchanged). Deductions reduce
+ * net pay only — they never touch EPF/SOCSO/EIS/PCB bases.
+ */
+export interface PayslipAdjustment {
+  id: string;
+  kind: 'earning' | 'deduction';
+  preset: AdjustmentPreset;
+  label: string;
+  amount: number;       // RM, positive
 }
 
 export interface Payslip {
@@ -294,10 +326,25 @@ export interface Payslip {
   eisEmployer: number;
   pcb: number;
   hrdLevy: number;        // employer-only
-  netPay: number;         // grossPay − employee statutory − pcb + claimsTotal
+  netPay: number;         // grossPay − employee statutory − pcb − adjustmentDeductions + claimsTotal
   employerCost: number;   // grossPay + employer statutory + hrdLevy + claimsTotal
   lines: PayslipLine[];
   ytd: { gross: number; epf: number; socso: number; pcb: number; net: number };
+  // ── Proration transparency (absent on legacy payslips) ──
+  /** Days paid this month per the run's proration method. */
+  daysWorked?: number;
+  /** Denominator of the proration basis (calendar days / working days / 26). */
+  daysInBasis?: number;
+  /** Proration method applied (mirrors the run's prorationMethod). */
+  prorationMethod?: PayrollProrationMethod;
+  /** daysWorked ÷ daysInBasis, capped at 1 — 1 means a full month. */
+  prorationFactor?: number;
+  // ── Ad-hoc editor adjustments (draft runs) ──
+  adjustments?: PayslipAdjustment[];
+  /** Sum of earning adjustments (already included in grossPay). */
+  adjustmentEarnings?: number;
+  /** Sum of deduction adjustments (already deducted from netPay). */
+  adjustmentDeductions?: number;
 }
 
 export type KPIStatus = 'active' | 'completed' | 'archived';

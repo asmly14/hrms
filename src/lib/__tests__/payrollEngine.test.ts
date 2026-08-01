@@ -1,10 +1,39 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { installLocalStorage } from './storageStub';
-import { setCollection, getCollection } from '../db';
+import { setCollection, getCollection, saveCompanies } from '../db';
 import { runPayroll, payslipFor, ytdForPcb } from '../payrollEngine';
 import { calcPCB } from '../statutory';
 import { round2 } from '../utils';
-import type { AttendanceRecord, Claim, Employee, LeaveRequest, PayrollRun, Payslip } from '../types';
+import type { AttendanceRecord, Claim, Company, Employee, LeaveRequest, PayrollRun, Payslip } from '../types';
+
+/**
+ * These legacy tests predate configurable proration: they assert the original
+ * ORP (÷26) unpaid-leave math. Pinning the active company to 'fixed-26'
+ * reproduces exactly that behaviour (joiner/leaver proration and the
+ * 'calendar'/'working-days' methods are covered by payrollRobustness.test.ts).
+ */
+const testCompany: Company = {
+  id: 'co-asm',
+  code: 'ASM',
+  name: 'ASM Tech Sdn Bhd',
+  regNo: '202401000001',
+  hqState: 'KUL',
+  status: 'active',
+  plan: 'pro',
+  createdAt: '2025-01-01T00:00:00.000Z',
+  branding: { logoText: 'ASM', accentColor: '#b45309' },
+  config: {
+    workingWeek: 'sat-sun',
+    payrollCutoffDay: 25,
+    payrollProration: 'fixed-26',
+    claimPolicy: {},
+    leaveTopUps: {},
+    enabledModules: ['attendance', 'leave', 'claims', 'payroll', 'kpi', 'insights', 'reports', 'onboarding', 'offboarding'],
+    customFields: [],
+    numberFormats: { employeeIdPrefix: 'ASM', payslipPrefix: 'ASM-PS' },
+    orgChart: { showDottedLineReports: false },
+  },
+};
 
 const emp1: Employee = {
   id: 'emp-1',
@@ -65,6 +94,7 @@ const claims: Claim[] = [
 ];
 
 function seedAll(): void {
+  saveCompanies([testCompany]);
   setCollection('employees', [emp1, emp2]);
   setCollection('attendance', attendance);
   setCollection('leaves', leaves);

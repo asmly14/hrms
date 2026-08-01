@@ -4,12 +4,12 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
-  AlertTriangle, ChevronRight, FileText, Landmark, Play, RefreshCw, Users, Wallet,
+  AlertTriangle, ChevronRight, FileText, Landmark, Play, RefreshCw, Undo2, Users, Wallet,
 } from 'lucide-react';
 import { useCollection } from '@/lib/db';
 import { useRole } from '@/lib/roleContext';
 import { useAuthSafe } from './useAuthSafe';
-import { runPayroll } from '@/lib/payrollEngine';
+import { runPayroll, undoPayrollRun } from '@/lib/payrollEngine';
 import { fmtDate, fmtRM } from '@/lib/utils';
 import type { Employee, PayrollRun, Payslip, Settings as CompanySettings } from '@/lib/types';
 import { monthLabel } from './helpers';
@@ -41,6 +41,7 @@ export default function PayrollHome() {
   const [wizardOpen, setWizardOpen] = useState(false);
   const [eaOpen, setEaOpen] = useState(false);
   const [rerunTarget, setRerunTarget] = useState<PayrollRun | null>(null);
+  const [undoTarget, setUndoTarget] = useState<PayrollRun | null>(null);
 
   const sorted = useMemo(
     () =>
@@ -81,6 +82,12 @@ export default function PayrollHome() {
     );
     setRerunTarget(null);
     navigate(`/payroll/runs/${res.run.id}`);
+  };
+
+  const confirmUndo = () => {
+    if (!undoTarget) return;
+    undoPayrollRun(undoTarget.id, role);
+    setUndoTarget(null);
   };
 
   return (
@@ -191,6 +198,14 @@ export default function PayrollHome() {
                             >
                               <RefreshCw className="h-4 w-4" />
                             </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              title="Undo this run"
+                              onClick={() => setUndoTarget(r)}
+                            >
+                              <Undo2 className="h-4 w-4" />
+                            </Button>
                             <Button variant="ghost" size="sm" asChild>
                               <Link to={`/payroll/runs/${r.id}`}>
                                 <ChevronRight className="h-4 w-4" />
@@ -240,6 +255,9 @@ export default function PayrollHome() {
                     <div className="mt-3 flex gap-2">
                       <Button variant="outline" size="sm" className="flex-1" onClick={() => setRerunTarget(r)}>
                         <RefreshCw className="h-4 w-4" /> Re-run
+                      </Button>
+                      <Button variant="outline" size="sm" className="flex-1" onClick={() => setUndoTarget(r)}>
+                        <Undo2 className="h-4 w-4" /> Undo
                       </Button>
                       <Button variant="outline" size="sm" className="flex-1" asChild>
                         <Link to={`/payroll/runs/${r.id}`}>View</Link>
@@ -293,6 +311,39 @@ export default function PayrollHome() {
         onCompleted={(runId) => navigate(`/payroll/runs/${runId}`)}
       />
       <EAFormDialog open={eaOpen} onOpenChange={setEaOpen} />
+
+      {/* Undo run — destructive: run + payslips deleted, claims revert to
+          approved, YTD recomputes from the remaining payslips. */}
+      <AlertDialog open={undoTarget !== null} onOpenChange={(o) => !o && setUndoTarget(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="h-5 w-5 text-amber-600" />
+              Undo {undoTarget ? monthLabel(undoTarget.monthKey) : ''} payroll run?
+            </AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-2">
+                <p>
+                  This permanently deletes the run and its{' '}
+                  <strong>{undoTarget?.employeeCount} payslip(s)</strong>
+                  {undoTarget?.status === 'draft' ? ' (draft)' : ''}.
+                </p>
+                <p>
+                  Claims marked paid by this run revert to <strong>approved</strong> so they can be
+                  reimbursed again, and year-to-date figures recompute from the remaining payslips.
+                  Re-running the month afterwards reproduces identical payslips.
+                </p>
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={confirmUndo}>
+              <Undo2 className="h-4 w-4" /> Undo run
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

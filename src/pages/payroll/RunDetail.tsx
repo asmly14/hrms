@@ -1,22 +1,36 @@
 /**
  * Payroll run detail — per-employee payslip table with totals, warnings
  * panel, and the statutory outputs tab (EPF/SOCSO/EIS/CP39/HRD + bank giro).
+ *
+ * Draft runs (wizard review step) expose the kakitangan-style editor:
+ * per-employee Adjust dialog (CP38 / Zakat / PTPTN / custom lines, reset,
+ * exclude) plus a Finalize action that locks the run. Statutory exports and
+ * the bank giro are gated to finalized runs. 'Undo run' deletes the run and
+ * its payslips and reverts paid claims to approved.
  */
 import { useMemo, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
-  AlertTriangle, ArrowLeft, ChevronRight, Search, Users, Wallet,
+  AlertTriangle, ArrowLeft, BadgeCheck, ChevronRight, Search, SlidersHorizontal,
+  Undo2, Users, Wallet,
 } from 'lucide-react';
 import { useCollection } from '@/lib/db';
+import { useRole } from '@/lib/roleContext';
+import { finalizePayrollRun, undoPayrollRun } from '@/lib/payrollEngine';
 import { fmtDate, fmtRM, round2 } from '@/lib/utils';
 import type {
   Employee, PayrollRun, Payslip, Settings as CompanySettings,
 } from '@/lib/types';
 import { empById, monthLabel } from './helpers';
 import StatutoryOutputs from './StatutoryOutputs';
+import EmployeeAdjustDialog from './EmployeeAdjustDialog';
 import { Money } from './components';
 import { canSeeSensitive, useAuthSafe } from './useAuthSafe';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -28,12 +42,18 @@ import {
 
 export default function RunDetail() {
   const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
+  const { role: stubRole } = useRole();
   const auth = useAuthSafe();
+  const role = auth?.role ?? stubRole;
   const { items: runs } = useCollection<PayrollRun>('payrollRuns');
   const { items: payslips } = useCollection<Payslip>('payslips');
   const { items: employees } = useCollection<Employee>('employees');
   const { items: settingsItems } = useCollection<CompanySettings>('settings');
   const [query, setQuery] = useState('');
+  const [adjustEmpId, setAdjustEmpId] = useState<string | null>(null);
+  const [confirmFinalize, setConfirmFinalize] = useState(false);
+  const [confirmUndo, setConfirmUndo] = useState(false);
 
   const run = runs.find((r) => r.id === id);
   const empMap = useMemo(() => empById(employees), [employees]);
@@ -89,6 +109,21 @@ export default function RunDetail() {
     );
   }
 
+  const isDraft = run.status === 'draft';
+  const adjustSlip = adjustEmpId ? slips.find((p) => p.employeeId === adjustEmpId) : undefined;
+
+  const doFinalize = () => {
+    finalizePayrollRun(run.id, role);
+    setConfirmFinalize(false);
+  };
+
+  const doUndo = () => {
+    if (undoPayrollRun(run.id, role)) {
+      setConfirmUndo(false);
+      navigate('/payroll');
+    }
+  };
+
   const stat = (label: string, value: string) => (
     <Card className="rounded-xl">
       <CardContent className="pt-5">
@@ -115,7 +150,29 @@ export default function RunDetail() {
             <Badge variant={run.status === 'finalized' ? 'secondary' : 'outline'}>{run.status}</Badge>
           </p>
         </div>
+        <div className="flex gap-2">
+          {isDraft && (
+            <Button onClick={() => setConfirmFinalize(true)}>
+              <BadgeCheck className="h-4 w-4" /> Finalize run
+            </Button>
+          )}
+          <Button variant="outline" onClick={() => setConfirmUndo(true)}>
+            <Undo2 className="h-4 w-4" /> Undo run
+          </Button>
+        </div>
       </div>
+
+      {isDraft && (
+        <Alert className="border-amber-300 bg-amber-50 dark:border-amber-900/40 dark:bg-amber-950/30">
+          <SlidersHorizontal className="h-4 w-4 text-amber-600" />
+          <AlertTitle className="text-amber-800 dark:text-amber-500">Draft — review before finalizing</AlertTitle>
+          <AlertDescription className="text-xs text-muted-foreground">
+            Use <strong>Adjust</strong> on any employee to add CP38 / Zakat / PTPTN / custom lines,
+            reset them to defaults, or exclude them from this run. Claims are only marked paid and
+            statutory outputs &amp; bank giro become available after you <strong>Finalize run</strong>.
+          </AlertDescription>
+        </Alert>
+      )}
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         {stat('Employees', String(run.employeeCount))}
@@ -227,11 +284,28 @@ export default function RunDetail() {
                         <TableCell className="text-right font-medium"><Money>{fmtRM(p.netPay)}</Money></TableCell>
                         <TableCell className="text-right"><Money>{fmtRM(p.employerCost)}</Money></TableCell>
                         <TableCell>
-                          <Button variant="ghost" size="sm" asChild>
-                            <Link to={`/payroll/payslip/${p.id}`}>
-                              <ChevronRight className="h-4 w-4" />
-                            </Link>
-                          </Button>
+                          <div className="flex justify-end gap-1">
+                            {(p.adjustmentDeductions ?? 0) + (p.adjustmentEarnings ?? 0) > 0 && (
+                              <Badge variant="outline" className="mr-1 border-amber-400 text-amber-700 dark:text-amber-500">
+                                adjusted
+                              </Badge>
+                            )}
+                            {isDraft && (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                title="Adjust this employee"
+                                onClick={() => setAdjustEmpId(p.employeeId)}
+                              >
+                                <SlidersHorizontal className="h-4 w-4" />
+                              </Button>
+                            )}
+                            <Button variant="ghost" size="sm" asChild>
+                              <Link to={`/payroll/payslip/${p.id}`}>
+                                <ChevronRight className="h-4 w-4" />
+                              </Link>
+                            </Button>
+                          </div>
                         </TableCell>
                       </TableRow>
                     ))}
@@ -276,30 +350,41 @@ export default function RunDetail() {
               {/* Mobile cards */}
               <div className="space-y-3 md:hidden">
                 {filtered.map((p) => (
-                  <Link
-                    key={p.id}
-                    to={`/payroll/payslip/${p.id}`}
-                    className="block rounded-xl border p-4 transition-colors hover:bg-accent"
-                  >
-                    <div className="flex items-center justify-between">
-                      <p className="font-medium">{empMap.get(p.employeeId)?.name ?? 'Unknown'}</p>
-                      <ChevronRight className="h-4 w-4 text-muted-foreground" />
-                    </div>
-                    <div className="mt-2 grid grid-cols-3 gap-2 text-sm">
-                      <div>
-                        <p className="text-xs text-muted-foreground">Gross</p>
-                        <p className="tabular-nums">{fmtRM(p.grossPay)}</p>
+                  <div key={p.id} className="rounded-xl border p-4">
+                    <Link
+                      to={`/payroll/payslip/${p.id}`}
+                      className="block transition-colors hover:bg-accent"
+                    >
+                      <div className="flex items-center justify-between">
+                        <p className="font-medium">{empMap.get(p.employeeId)?.name ?? 'Unknown'}</p>
+                        <ChevronRight className="h-4 w-4 text-muted-foreground" />
                       </div>
-                      <div>
-                        <p className="text-xs text-muted-foreground">PCB</p>
-                        <p className="tabular-nums">{fmtRM(p.pcb)}</p>
+                      <div className="mt-2 grid grid-cols-3 gap-2 text-sm">
+                        <div>
+                          <p className="text-xs text-muted-foreground">Gross</p>
+                          <p className="tabular-nums">{fmtRM(p.grossPay)}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-muted-foreground">PCB</p>
+                          <p className="tabular-nums">{fmtRM(p.pcb)}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-muted-foreground">Net</p>
+                          <p className="font-medium tabular-nums">{fmtRM(p.netPay)}</p>
+                        </div>
                       </div>
-                      <div>
-                        <p className="text-xs text-muted-foreground">Net</p>
-                        <p className="font-medium tabular-nums">{fmtRM(p.netPay)}</p>
-                      </div>
-                    </div>
-                  </Link>
+                    </Link>
+                    {isDraft && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="mt-3 w-full"
+                        onClick={() => setAdjustEmpId(p.employeeId)}
+                      >
+                        <SlidersHorizontal className="h-4 w-4" /> Adjust
+                      </Button>
+                    )}
+                  </div>
                 ))}
               </div>
               {filtered.length === 0 && (
@@ -312,14 +397,102 @@ export default function RunDetail() {
         </TabsContent>
 
         <TabsContent value="statutory">
-          <StatutoryOutputs
-            run={run}
-            slips={slips}
-            empMap={empMap}
-            settings={settingsItems[0]}
-          />
+          {isDraft ? (
+            <Card className="rounded-xl">
+              <CardContent className="flex flex-col items-center gap-2 py-12 text-center">
+                <BadgeCheck className="h-8 w-8 text-muted-foreground" />
+                <p className="font-medium">Finalize the run to unlock statutory outputs</p>
+                <p className="max-w-sm text-sm text-muted-foreground">
+                  EPF Form A, SOCSO Borang 8A, EIS, CP39, HRD levy and the bank giro file are
+                  generated only for finalized runs, so draft edits can never leak into a filing.
+                </p>
+                <Button onClick={() => setConfirmFinalize(true)}>
+                  <BadgeCheck className="h-4 w-4" /> Finalize run
+                </Button>
+              </CardContent>
+            </Card>
+          ) : (
+            <StatutoryOutputs
+              run={run}
+              slips={slips}
+              empMap={empMap}
+              settings={settingsItems[0]}
+            />
+          )}
         </TabsContent>
       </Tabs>
+
+      {/* Kakitangan-style per-employee editor (draft runs only) */}
+      <EmployeeAdjustDialog
+        open={adjustEmpId !== null}
+        onOpenChange={(o) => !o && setAdjustEmpId(null)}
+        runId={run.id}
+        payslip={adjustSlip}
+        employee={adjustEmpId ? empMap.get(adjustEmpId) : undefined}
+        actor={role}
+        onChanged={() => {/* collections are reactive — re-render happens automatically */}}
+        onExcluded={() => setAdjustEmpId(null)}
+      />
+
+      {/* Finalize confirmation */}
+      <AlertDialog open={confirmFinalize} onOpenChange={setConfirmFinalize}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <BadgeCheck className="h-5 w-5 text-amber-600" />
+              Finalize {monthLabel(run.monthKey)} payroll?
+            </AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-2">
+                <p>
+                  Finalizing locks this run's <strong>{slips.length} payslip(s)</strong> (net{' '}
+                  <strong>{fmtRM(run.totalNet)}</strong>): per-employee adjustments, resets and
+                  exclusions are no longer possible.
+                </p>
+                <p>
+                  Approved claims covered by the run are marked <strong>paid</strong>, and the
+                  statutory outputs (EPF / SOCSO / EIS / CP39 / HRD) and bank giro file become
+                  available. To change figures afterwards, undo the run and start again.
+                </p>
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={doFinalize}>
+              <BadgeCheck className="h-4 w-4" /> Finalize run
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Undo confirmation */}
+      <AlertDialog open={confirmUndo} onOpenChange={setConfirmUndo}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="h-5 w-5 text-amber-600" />
+              Undo {monthLabel(run.monthKey)} payroll run?
+            </AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-2">
+                <p>This permanently deletes the run and its <strong>{slips.length} payslip(s)</strong>.</p>
+                <p>
+                  Claims marked paid by this run revert to <strong>approved</strong> so they can be
+                  reimbursed again, and year-to-date figures recompute from the remaining payslips.
+                  Re-running the month afterwards reproduces identical payslips.
+                </p>
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={doUndo}>
+              <Undo2 className="h-4 w-4" /> Undo run
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

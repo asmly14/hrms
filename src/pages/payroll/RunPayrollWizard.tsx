@@ -139,7 +139,10 @@ export default function RunPayrollWizard({ open, onOpenChange, onCompleted }: Wi
 
   const execute = () => {
     const ids = eligible.filter((e) => selectedIds.has(e.id)).map((e) => e.id);
-    const res = runPayroll(month, ids, role);
+    // Kakitangan-style review step: the wizard creates a DRAFT run so HR can
+    // adjust per-employee lines (CP38 / Zakat / PTPTN / custom), exclude or
+    // reset employees on the run detail page, then finalize to lock it.
+    const res = runPayroll(month, ids, role, { draft: true });
     setResult(res);
     setStep(3);
   };
@@ -335,10 +338,11 @@ export default function RunPayrollWizard({ open, onOpenChange, onCompleted }: Wi
               <BadgeCheck className="h-5 w-5 text-amber-600" />
               <div>
                 <p className="text-sm font-medium">
-                  Payroll for {monthLabel(result.run.monthKey)} finalized
+                  Draft payroll for {monthLabel(result.run.monthKey)} created
                 </p>
                 <p className="text-xs text-muted-foreground">
-                  {result.run.employeeCount} payslips generated · run as {result.run.runBy}
+                  {result.run.employeeCount} payslips generated · run as {result.run.runBy} ·
+                  review &amp; adjust per employee, then finalize on the run detail page
                 </p>
               </div>
             </div>
@@ -382,7 +386,7 @@ export default function RunPayrollWizard({ open, onOpenChange, onCompleted }: Wi
           )}
           {step === 2 && (
             <Button onClick={execute}>
-              <Play className="h-4 w-4" /> Run payroll for {monthLabel(month)}
+              <Play className="h-4 w-4" /> Create draft for {monthLabel(month)}
             </Button>
           )}
           {step === 3 && result && (
@@ -393,7 +397,7 @@ export default function RunPayrollWizard({ open, onOpenChange, onCompleted }: Wi
                 onCompleted(result.run.id);
               }}
             >
-              View run detail <ChevronRight className="h-4 w-4" />
+              Review &amp; finalize <ChevronRight className="h-4 w-4" />
             </Button>
           )}
         </DialogFooter>
