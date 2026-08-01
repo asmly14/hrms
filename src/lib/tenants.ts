@@ -9,9 +9,11 @@ import type { Company, ModuleKey, StateCode, WorkingWeek } from './types';
 export const COMPANY_ID_ASM = 'co-asm';
 export const COMPANY_ID_MERDEKA = 'co-merdeka';
 export const COMPANY_ID_DESA = 'co-desa';
+/** Real (empty) tenant: ASM Tech Division Sdn Bhd — no demo data seeded. */
+export const COMPANY_ID_ASMDIV = 'co-asm-division';
 
 /** Ids of the companies seeded by seedIfEmpty(). */
-export const DEMO_COMPANY_IDS = [COMPANY_ID_ASM, COMPANY_ID_MERDEKA, COMPANY_ID_DESA] as const;
+export const DEMO_COMPANY_IDS = [COMPANY_ID_ASM, COMPANY_ID_MERDEKA, COMPANY_ID_DESA, COMPANY_ID_ASMDIV] as const;
 
 /** Fri–Sat weekend states (mirrors lib/holidays.ts, kept dependency-free). */
 const FRI_SAT_STATES: StateCode[] = ['JHR', 'KDH', 'KTN', 'TRG'];
@@ -72,6 +74,17 @@ const SPECS: CompanySeedSpec[] = [
     plan: 'free',
     status: 'trial',
     accentColor: '#0f766e',
+    payrollCutoffDay: 25,
+  },
+  {
+    id: COMPANY_ID_ASMDIV,
+    code: 'ASMD',
+    name: 'ASM Tech Division Sdn Bhd',
+    regNo: '(registration pending)',
+    hqState: 'KUL',
+    plan: 'enterprise',
+    status: 'active',
+    accentColor: '#9a3412',
     payrollCutoffDay: 25,
   },
 ];

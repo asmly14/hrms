@@ -18,7 +18,7 @@
 
 import { uid } from './db';
 import { monthKey } from './utils';
-import { companySeedRecord, COMPANY_ID_ASM, COMPANY_ID_MERDEKA, COMPANY_ID_DESA } from './tenants';
+import { companySeedRecord, COMPANY_ID_ASM, COMPANY_ID_MERDEKA, COMPANY_ID_DESA, COMPANY_ID_ASMDIV } from './tenants';
 import type {
   AttendanceRecord, Claim, Company, Department, Employee, KPI, KPIReview, LeaveBalance,
   LeaveRequest, Position, Settings, Shift, StateCode,
@@ -668,6 +668,10 @@ export function buildTenantSeedData(companyId: string): TenantSeed | null {
       return { company: companySeedRecord(companyId), collections: buildMerdekaSeedData() };
     case COMPANY_ID_DESA:
       return { company: companySeedRecord(companyId), collections: buildDesaSeedData() };
+    case COMPANY_ID_ASMDIV:
+      // ASM Tech Division Sdn Bhd — REAL tenant, intentionally EMPTY:
+      // no demo employees/attendance/claims; the owner customizes from scratch.
+      return { company: companySeedRecord(companyId), collections: {} };
     default:
       return null;
   }

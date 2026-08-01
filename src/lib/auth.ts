@@ -37,7 +37,7 @@
  * the first page load.
  */
 import { getCollection, getCompanies, setActiveTenantId, uid } from './db';
-import { COMPANY_ID_ASM, COMPANY_ID_DESA, COMPANY_ID_MERDEKA } from './tenants';
+import { COMPANY_ID_ASM, COMPANY_ID_DESA, COMPANY_ID_MERDEKA, COMPANY_ID_ASMDIV } from './tenants';
 import type { Employee } from './types';
 
 /** Display-name role (matches AppRole in roleContext.tsx, plus SuperAdmin). */
@@ -108,6 +108,8 @@ const FIXED_ACCOUNTS: UserAccount[] = [
   // Desa Retail Group (co-desa)
   { id: 'user-admin-desa', username: 'admin3', password: 'admin123', role: 'Admin', companyId: COMPANY_ID_DESA },
   { id: 'user-hr-desa', username: 'hr3', password: 'hr123', role: 'HR', companyId: COMPANY_ID_DESA },
+  // ASM Tech Division Sdn Bhd (co-asm-division) — real tenant, empty by design
+  { id: 'user-admin-asmd', username: 'smithang', password: '123123', role: 'Admin', companyId: COMPANY_ID_ASMDIV },
 ];
 
 export const DEMO_PASSWORD = 'password123';
