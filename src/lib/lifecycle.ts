@@ -51,7 +51,21 @@ export type OffboardingReason =
   | 'resignation'
   | 'retirement'
   | 'retrenchment'
-  | 'termination';
+  | 'termination'
+  // Wave: employee-directory separation actions (additive).
+  | 'vss'            // Voluntary Separation Scheme
+  | 'contract-end'   // fixed-term contract reached its end date
+  | 'absconded';     // employee abandoned service (EA s.12(3) inquiry path)
+
+/** VSS ex-gratia package stored on the offboarding case. */
+export interface VssPackage {
+  /** Ex-gratia months agreed (e.g. 1.5 × last drawn salary). */
+  months: number;
+  /** RM — computed as months × last drawn monthly salary. */
+  amount: number;
+  /** Free-text benefits note (medical extension, outplacement, etc.). */
+  terms?: string;
+}
 
 export type ClearanceCategory =
   | 'Assets'
@@ -104,6 +118,10 @@ export interface OffboardingCase {
   /** LHDN CP22A — employer must notify ≥ 30 days before cessation. */
   cp22aDueDate: string; // ISO date
   status: OffboardingStatus;
+  /** VSS ex-gratia package — present only when reason === 'vss' (additive). */
+  vssPackage?: VssPackage;
+  /** Free-text separation remarks (e.g. absconded flag note) — additive. */
+  notes?: string;
   createdAt: string; // ISO datetime
 }
 
@@ -414,6 +432,10 @@ export function buildOffboardingCase(input: {
   leaveBalances: LeaveBalance[];
   claims: Claim[];
   deductions?: number;
+  /** VSS ex-gratia package (reason 'vss' only) — additive. */
+  vssPackage?: VssPackage;
+  /** Free-text separation remarks — additive. */
+  notes?: string;
 }): Omit<OffboardingCase, 'id'> {
   const { employee, reason, noticeDate } = input;
   const noticeWeeks = noticeWeeksFor(employee.joinDate, noticeDate);
@@ -441,6 +463,8 @@ export function buildOffboardingCase(input: {
     }),
     cp22aDueDate: cp22aDueDateFor(lastWorkingDay),
     status: 'notice-given',
+    vssPackage: input.vssPackage,
+    notes: input.notes,
     createdAt: new Date().toISOString(),
   };
 }
@@ -477,6 +501,9 @@ export const OFFBOARDING_REASON_LABELS: Record<OffboardingReason, string> = {
   retirement: 'Retirement',
   retrenchment: 'Retrenchment',
   termination: 'Termination',
+  vss: 'Voluntary Separation Scheme (VSS)',
+  'contract-end': 'Contract end',
+  absconded: 'Absconded',
 };
 
 export const OFFBOARDING_STATUS_LABELS: Record<OffboardingStatus, string> = {

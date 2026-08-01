@@ -8,6 +8,7 @@ import { fmtRM } from '@/lib/utils';
 import type { Department, Employee, Position } from '@/lib/types';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
 import {
@@ -37,6 +38,8 @@ import { StatusBadge, TypeBadge } from './EmployeeBadges';
 import { EmployeeFormDialog } from './EmployeeFormDialog';
 import { NewHireWizard } from './NewHireWizard';
 import { ProbationStrip } from './ProbationStrip';
+import { BulkActionBar } from './BulkActionBar';
+import { SeparationMenu } from './SeparationActions';
 import { deptName, maskIc, positionTitle } from './helpers';
 
 type SortKey = 'name' | 'salary-desc' | 'salary-asc' | 'join-desc' | 'join-asc';
@@ -51,9 +54,10 @@ const SORT_LABELS: Record<SortKey, string> = {
 
 export default function EmployeesPage() {
   const navigate = useNavigate();
-  const { role, employeeId, scopeEmployees } = useAuth();
+  const { role, employeeId, scopeEmployees, user } = useAuth();
   /** Salary visibility + add/edit mutations are Admin/HR-only. */
   const isHR = role === 'Admin' || role === 'HR';
+  const actorName = user?.username ?? 'HR Admin';
 
   const { items: employees } = useCollection<Employee>('employees');
   const { items: departments } = useCollection<Department>('departments');
@@ -67,6 +71,8 @@ export default function EmployeesPage() {
   const [sort, setSort] = useState<SortKey>('name');
   const [addOpen, setAddOpen] = useState(false);
   const [wizardOpen, setWizardOpen] = useState(false);
+  /** Bulk selection — preserved across filtering; pruned only when a record vanishes. */
+  const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(new Set());
 
   // Seed data loads asynchronously on first launch — show a brief skeleton.
   const [loading, setLoading] = useState(employees.length === 0);
@@ -127,6 +133,45 @@ export default function EmployeesPage() {
     setStateFilter('all');
     setStatusFilter('all');
     setTypeFilter('all');
+  };
+
+  // Prune selection only when records actually disappear (delete / tenant
+  // switch) — filtering the table never clears it.
+  useEffect(() => {
+    setSelectedIds((prev) => {
+      const alive = new Set(employees.map((e) => e.id));
+      const next = new Set([...prev].filter((id) => alive.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [employees]);
+
+  const selectedEmployees = useMemo(
+    () => scoped.filter((e) => selectedIds.has(e.id)),
+    [scoped, selectedIds],
+  );
+
+  const toggleOne = (id: string, checked: boolean) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  };
+
+  const filteredIds = filtered.map((e) => e.id);
+  const selectedInFilter = filteredIds.filter((id) => selectedIds.has(id)).length;
+  const allFilteredSelected = filteredIds.length > 0 && selectedInFilter === filteredIds.length;
+
+  const toggleAllFiltered = (checked: boolean) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      filteredIds.forEach((id) => {
+        if (checked) next.add(id);
+        else next.delete(id);
+      });
+      return next;
+    });
   };
 
   // Employee role: the directory is off-limits — land on own detail record.
@@ -272,6 +317,21 @@ export default function EmployeesPage() {
           <Table>
             <TableHeader>
               <TableRow>
+                {isHR && (
+                  <TableHead className="w-10">
+                    <Checkbox
+                      aria-label="Select all filtered employees"
+                      checked={
+                        allFilteredSelected
+                          ? true
+                          : selectedInFilter > 0
+                            ? 'indeterminate'
+                            : false
+                      }
+                      onCheckedChange={(v) => toggleAllFiltered(v === true)}
+                    />
+                  </TableHead>
+                )}
                 <TableHead>Employee</TableHead>
                 <TableHead>NRIC</TableHead>
                 <TableHead>Department</TableHead>
@@ -291,6 +351,7 @@ export default function EmployeesPage() {
                     </button>
                   </TableHead>
                 )}
+                {isHR && <TableHead className="w-12" />}
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -298,8 +359,18 @@ export default function EmployeesPage() {
                 <TableRow
                   key={e.id}
                   className="cursor-pointer"
+                  data-state={selectedIds.has(e.id) ? 'selected' : undefined}
                   onClick={() => navigate(`/employees/${e.id}`)}
                 >
+                  {isHR && (
+                    <TableCell onClick={(ev) => ev.stopPropagation()}>
+                      <Checkbox
+                        aria-label={`Select ${e.name}`}
+                        checked={selectedIds.has(e.id)}
+                        onCheckedChange={(v) => toggleOne(e.id, v === true)}
+                      />
+                    </TableCell>
+                  )}
                   <TableCell>
                     <div className="flex items-center gap-3">
                       <EmployeeAvatar name={e.name} size="sm" />
@@ -318,6 +389,11 @@ export default function EmployeesPage() {
                   <TableCell><TypeBadge type={e.employmentType} /></TableCell>
                   <TableCell><StatusBadge status={e.status} /></TableCell>
                   {isHR && <TableCell className="text-right font-medium">{fmtRM(e.baseSalary)}</TableCell>}
+                  {isHR && (
+                    <TableCell onClick={(ev) => ev.stopPropagation()}>
+                      <SeparationMenu targets={[e]} actorName={actorName} />
+                    </TableCell>
+                  )}
                 </TableRow>
               ))}
             </TableBody>
@@ -327,33 +403,58 @@ export default function EmployeesPage() {
 
       {/* Mobile cards (<md) */}
       {!loading && filtered.length > 0 && (
-        <div className="grid grid-cols-1 gap-3 md:hidden">
+        <div className="grid grid-cols-1 gap-3 pb-20 md:hidden">
           {filtered.map((e) => (
-            <Link key={e.id} to={`/employees/${e.id}`}>
-              <Card className="rounded-xl transition-colors hover:bg-stone-50">
-                <CardContent className="flex items-center gap-3 p-4">
-                  <EmployeeAvatar name={e.name} />
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate font-medium">{e.name}</p>
-                    <p className="truncate text-xs text-muted-foreground">
-                      {deptName(departments, e.departmentId)} · {positionTitle(positions, e.positionId)}
-                    </p>
-                    <div className="mt-1.5 flex flex-wrap gap-1.5">
-                      <StatusBadge status={e.status} />
-                      <TypeBadge type={e.employmentType} />
+            <div key={e.id} className="relative">
+              <Link to={`/employees/${e.id}`}>
+                <Card className="rounded-xl transition-colors hover:bg-stone-50">
+                  <CardContent className="flex items-center gap-3 p-4">
+                    {isHR && (
+                      <div onClick={(ev) => ev.preventDefault()}>
+                        <Checkbox
+                          aria-label={`Select ${e.name}`}
+                          checked={selectedIds.has(e.id)}
+                          onCheckedChange={(v) => toggleOne(e.id, v === true)}
+                        />
+                      </div>
+                    )}
+                    <EmployeeAvatar name={e.name} />
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate font-medium">{e.name}</p>
+                      <p className="truncate text-xs text-muted-foreground">
+                        {deptName(departments, e.departmentId)} · {positionTitle(positions, e.positionId)}
+                      </p>
+                      <div className="mt-1.5 flex flex-wrap gap-1.5">
+                        <StatusBadge status={e.status} />
+                        <TypeBadge type={e.employmentType} />
+                      </div>
                     </div>
-                  </div>
-                  {isHR && (
-                    <div className="text-right">
-                      <p className="text-sm font-semibold">{fmtRM(e.baseSalary)}</p>
-                      <p className="text-xs text-muted-foreground">/ month</p>
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
-            </Link>
+                    {isHR && (
+                      <div className="text-right">
+                        <p className="text-sm font-semibold">{fmtRM(e.baseSalary)}</p>
+                        <p className="text-xs text-muted-foreground">/ month</p>
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+              </Link>
+              {isHR && (
+                <div className="absolute right-2 top-2">
+                  <SeparationMenu targets={[e]} actorName={actorName} />
+                </div>
+              )}
+            </div>
           ))}
         </div>
+      )}
+
+      {/* Bulk selection bar (Admin/HR) */}
+      {isHR && (
+        <BulkActionBar
+          selected={selectedEmployees}
+          actorName={actorName}
+          onClear={() => setSelectedIds(new Set())}
+        />
       )}
 
       {isHR && (

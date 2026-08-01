@@ -4,7 +4,7 @@
  * that flips the employee record to resigned + writes an audit entry.
  */
 import { useMemo, useState } from 'react';
-import { AlertTriangle, CalendarClock, ChevronDown, FileWarning, UserMinus } from 'lucide-react';
+import { AlertTriangle, CalendarClock, ChevronDown, FileText, FileWarning, HandCoins, UserMinus } from 'lucide-react';
 import type { Employee } from '@/lib/types';
 import { useCollection } from '@/lib/db';
 import {
@@ -32,6 +32,9 @@ const REASON_STYLES: Record<OffboardingCase['reason'], string> = {
   retirement: 'border-lime-600 bg-lime-50 text-lime-700 dark:bg-lime-950/40',
   retrenchment: 'border-red-400 bg-red-50 text-red-700 dark:bg-red-950/40',
   termination: 'border-orange-500 bg-orange-50 text-orange-700 dark:bg-orange-950/40',
+  vss: 'border-amber-500 bg-amber-50 text-amber-700 dark:bg-amber-950/40',
+  'contract-end': 'border-stone-400 bg-stone-50 text-stone-600 dark:bg-stone-900/40',
+  absconded: 'border-red-500 bg-red-50 text-red-800 dark:bg-red-950/40',
 };
 
 const STATUS_STYLES: Record<OffboardingCase['status'], string> = {
@@ -211,6 +214,36 @@ export default function OffboardingCaseCard({ kase, employee, actorName }: Props
                   Tiers: &lt;2 yrs 10 days · 2–5 yrs 15 days · ≥5 yrs 20 days per year of service.
               </AlertDescription>
             </Alert>
+            )}
+
+            {/* ── VSS package (when present) ── */}
+            {kase.vssPackage && (
+              <Alert className="rounded-xl border-amber-300 bg-amber-50/60 dark:border-amber-900/50 dark:bg-amber-950/20">
+                <HandCoins className="h-4 w-4" />
+                <AlertTitle className="text-sm">VSS ex-gratia package</AlertTitle>
+                <AlertDescription className="text-xs">
+                  {kase.vssPackage.months} month{kase.vssPackage.months === 1 ? '' : 's'} × last
+                  drawn salary → estimated payout{' '}
+                  <span className="font-medium text-foreground">
+                    {fmtRM(kase.vssPackage.amount)}
+                  </span>
+                  , payable in addition to statutory final pay.
+                  {kase.vssPackage.terms && (
+                    <span className="mt-1 block text-muted-foreground">
+                      Terms: {kase.vssPackage.terms}
+                    </span>
+                  )}
+                </AlertDescription>
+              </Alert>
+            )}
+
+            {/* ── Separation notes (e.g. absconded flag) ── */}
+            {kase.notes && (
+              <Alert className="rounded-xl border-stone-200 bg-stone-50 dark:border-stone-800 dark:bg-stone-900/50">
+                <FileText className="h-4 w-4" />
+                <AlertTitle className="text-sm">Separation notes</AlertTitle>
+                <AlertDescription className="text-xs">{kase.notes}</AlertDescription>
+              </Alert>
             )}
 
             {/* ── Clearance checklist ── */}

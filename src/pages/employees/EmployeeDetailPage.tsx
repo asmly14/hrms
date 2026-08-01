@@ -11,14 +11,14 @@ import {
   Pencil,
   Scale,
   ShieldCheck,
-  Trash2,
   TrendingDown,
   TrendingUp,
   User,
+  UserMinus,
   UserX,
   Wallet,
 } from 'lucide-react';
-import { logAudit, useCollection } from '@/lib/db';
+import { getCollection, useCollection } from '@/lib/db';
 import { useAuth } from '@/lib/authContext';
 import { useTenant } from '@/lib/tenantContext';
 import { stateInfo } from '@/lib/holidays';
@@ -32,17 +32,6 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
 import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-  AlertDialogTrigger,
-} from '@/components/ui/alert-dialog';
-import {
   Empty,
   EmptyDescription,
   EmptyHeader,
@@ -53,6 +42,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { EmployeeAvatar } from './EmployeeAvatar';
 import { StatusBadge, TypeBadge } from './EmployeeBadges';
 import { EmployeeFormDialog } from './EmployeeFormDialog';
+import { SeparationMenu } from './SeparationActions';
 import { carryInOf, customOf } from './types';
 import {
   belowMinimumWage,
@@ -101,10 +91,9 @@ export default function EmployeeDetailPage() {
   const { role, employeeId, canViewEmployee, user } = useAuth();
   /** Sensitive data (salary, full NRIC/bank) and mutations: Admin/HR only. */
   const isHR = role === 'Admin' || role === 'HR';
-  const isAdmin = role === 'Admin';
   const actorName = user?.username ?? 'HR Admin';
 
-  const { items: employees, remove } = useCollection<Employee>('employees');
+  const { items: employees } = useCollection<Employee>('employees');
   const { items: departments } = useCollection<Department>('departments');
   const { items: positions } = useCollection<Position>('positions');
   const { items: leaveBalances } = useCollection<LeaveBalance>('leaveBalances');
@@ -112,7 +101,6 @@ export default function EmployeeDetailPage() {
   const { activeCompany } = useTenant();
 
   const [editOpen, setEditOpen] = useState(false);
-  const [deleteOpen, setDeleteOpen] = useState(false);
 
   const emp = employees.find((e) => e.id === id);
 
@@ -198,16 +186,11 @@ export default function EmployeeDetailPage() {
 
   const daysLeft = emp.status === 'probation' ? probationDaysLeft(emp.joinDate) : null;
 
-  const confirmDelete = () => {
-    remove(emp.id);
-    logAudit({
-      actorName,
-      action: 'employee.delete',
-      entity: 'employees',
-      entityId: emp.id,
-      detail: `Deleted employee ${emp.name} (${maskIc(emp.ic)})`,
-    });
-    navigate('/employees');
+  // After a permanent delete, leave the now-dangling detail route.
+  const onSeparationCompleted = () => {
+    if (!getCollection<Employee>('employees').some((x) => x.id === emp.id)) {
+      navigate('/employees');
+    }
   };
 
   // Benchmark comparison chip (market median for role / seniority / state).
@@ -277,46 +260,16 @@ export default function EmployeeDetailPage() {
                 <Button variant="outline" onClick={() => setEditOpen(true)}>
                   <Pencil className="mr-1.5 h-4 w-4" /> Edit
                 </Button>
-                {isAdmin && (
-                  <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
-                    <AlertDialogTrigger asChild>
-                      <Button variant="outline" className="text-red-700 hover:bg-red-50 hover:text-red-800">
-                        <Trash2 className="mr-1.5 h-4 w-4" /> Delete
-                      </Button>
-                    </AlertDialogTrigger>
-                    <AlertDialogContent>
-                      <AlertDialogHeader>
-                        <AlertDialogTitle>Delete {emp.name}?</AlertDialogTitle>
-                        <AlertDialogDescription>
-                          {slips.length > 0 ? (
-                            <>
-                              This record cannot be deleted — {emp.name} has {slips.length}{' '}
-                              payslip{slips.length > 1 ? 's' : ''} on file, which statutory records
-                              depend on. Set the status to Resigned instead.
-                            </>
-                          ) : (
-                            <>
-                              This permanently removes the employee record from the directory.
-                              Their leave balances and other linked records are kept. This action
-                              cannot be undone.
-                            </>
-                          )}
-                        </AlertDialogDescription>
-                      </AlertDialogHeader>
-                      <AlertDialogFooter>
-                        <AlertDialogCancel>Cancel</AlertDialogCancel>
-                        {slips.length === 0 && (
-                          <AlertDialogAction
-                            className="bg-red-600 text-white hover:bg-red-700"
-                            onClick={confirmDelete}
-                          >
-                            Delete employee
-                          </AlertDialogAction>
-                        )}
-                      </AlertDialogFooter>
-                    </AlertDialogContent>
-                  </AlertDialog>
-                )}
+                <SeparationMenu
+                  targets={[emp]}
+                  actorName={actorName}
+                  onCompleted={onSeparationCompleted}
+                  trigger={
+                    <Button variant="outline">
+                      <UserMinus className="mr-1.5 h-4 w-4" /> Separation
+                    </Button>
+                  }
+                />
               </div>
             )}
           </CardContent>
