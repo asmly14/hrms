@@ -24,7 +24,8 @@
  * instead of importing the helper (keeps this scope tsc-clean standalone).
  */
 import { useEffect } from 'react';
-import { getCollection, setCollection, uid, useCollection } from '@/lib/db';
+import { getCollection, setCollection, uid, upsertCompany, useCollection } from '@/lib/db';
+import { useTenant } from '@/lib/tenantContext';
 import type { Settings } from '@/lib/types';
 
 export const COMPANY_ID = 'company';
@@ -264,6 +265,7 @@ export interface SettingsData {
 export function useSettingsData(): SettingsData {
   const coll = useCollection<SettingsRow>('settings');
   const { items } = coll;
+  const { activeCompany, refreshCompanies } = useTenant();
 
   // Runs after every render; the storage re-read keeps it a no-op once the
   // extended records exist.
@@ -300,7 +302,32 @@ export function useSettingsData(): SettingsData {
     claimPolicy,
     leaveTopups,
     locations,
-    saveCompany: (patch) => coll.update(COMPANY_ID, patch as Partial<SettingsRow>),
+    saveCompany: (patch) => {
+      coll.update(COMPANY_ID, patch as Partial<SettingsRow>);
+      // Keep the Company directory record in sync so the top-left brand
+      // (which prefers activeCompany.name/regNo/hqState) reflects edits
+      // made here immediately.
+      if (activeCompany) {
+        const next = { ...activeCompany };
+        let changed = false;
+        if (typeof patch.companyName === 'string' && patch.companyName.trim()) {
+          next.name = patch.companyName.trim();
+          changed = true;
+        }
+        if (typeof patch.companyRegNo === 'string') {
+          next.regNo = patch.companyRegNo.trim();
+          changed = true;
+        }
+        if (patch.hqState) {
+          next.hqState = patch.hqState;
+          changed = true;
+        }
+        if (changed) {
+          upsertCompany(next);
+          refreshCompanies();
+        }
+      }
+    },
     saveCompanyExtras: (patch) => coll.update(COMPANY_EXTRAS_ID, patch as Partial<SettingsRow>),
     savePayrollPolicy: (patch) => coll.update(PAYROLL_POLICY_ID, patch as Partial<SettingsRow>),
     saveClaimPolicy: (patch) => coll.update(CLAIM_POLICY_ID, patch as Partial<SettingsRow>),
