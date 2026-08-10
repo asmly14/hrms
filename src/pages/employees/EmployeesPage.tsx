@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link, Navigate, useNavigate } from 'react-router-dom';
 import { ArrowUpDown, ListFilter, Search, Sparkles, UserPlus, Users } from 'lucide-react';
 import { useCollection } from '@/lib/db';
-import { useAuth } from '@/lib/authContext';
+import { useAuth } from '@/lib/useAuth';
 import { states, stateInfo } from '@/lib/holidays';
 import { fmtRM } from '@/lib/utils';
 import type { Department, Employee, Position } from '@/lib/types';
@@ -76,14 +76,16 @@ export default function EmployeesPage() {
 
   // Seed data loads asynchronously on first launch — show a brief skeleton.
   const [loading, setLoading] = useState(employees.length === 0);
+  // Data arrived → stop the skeleton immediately (render-phase adjust).
+  if (loading && employees.length > 0) {
+    setLoading(false);
+  }
+  // Still empty after a grace window → stop (genuinely empty tenant).
   useEffect(() => {
-    if (employees.length > 0) {
-      setLoading(false);
-      return;
-    }
+    if (!loading) return;
     const t = setTimeout(() => setLoading(false), 1200);
     return () => clearTimeout(t);
-  }, [employees.length]);
+  }, [loading]);
 
   // Role scoping: Admin/HR see all; Manager sees own department only.
   const scoped = useMemo(() => scopeEmployees(employees), [employees, scopeEmployees]);
@@ -136,14 +138,17 @@ export default function EmployeesPage() {
   };
 
   // Prune selection only when records actually disappear (delete / tenant
-  // switch) — filtering the table never clears it.
-  useEffect(() => {
+  // switch) — filtering the table never clears it. Render-phase adjust keyed
+  // on the collection identity, not an effect.
+  const [prunedFor, setPrunedFor] = useState(employees);
+  if (prunedFor !== employees) {
+    setPrunedFor(employees);
     setSelectedIds((prev) => {
       const alive = new Set(employees.map((e) => e.id));
       const next = new Set([...prev].filter((id) => alive.has(id)));
       return next.size === prev.size ? prev : next;
     });
-  }, [employees]);
+  }
 
   const selectedEmployees = useMemo(
     () => scoped.filter((e) => selectedIds.has(e.id)),

@@ -3,6 +3,7 @@
  * Preview of the template items is shown before creating.
  */
 import { useMemo, useState } from 'react';
+import { toast } from 'sonner';
 import type { Employee, Department } from '@/lib/types';
 import { useCollection } from '@/lib/db';
 import {
@@ -96,6 +97,7 @@ export default function NewChecklistDialog({
       `Onboarding checklist (${template.label}) started for ${emp?.name ?? employeeId}, start ${startDate}`,
       actorName,
     );
+    toast.success(`Onboarding checklist started for ${emp?.name ?? employeeId}`);
     reset();
     onOpenChange(false);
   }

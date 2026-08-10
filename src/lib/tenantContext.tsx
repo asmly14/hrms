@@ -18,7 +18,7 @@
  * provider subscribes to those changes, so no manual sync is needed.
  */
 import {
-  createContext, useCallback, useContext, useEffect, useMemo, useState,
+  useCallback, useEffect, useMemo, useState,
   type ReactNode,
 } from 'react';
 import {
@@ -26,29 +26,10 @@ import {
   seedTenantIfEmpty,
 } from './db';
 import { getSession } from './auth';
+import { TenantContext, type TenantContextValue } from './useTenant';
 import type { Company } from './types';
 
-export interface TenantContextValue {
-  /** All companies in the global directory. */
-  companies: Company[];
-  /** Active tenant id; null in the SuperAdmin system view. */
-  activeCompanyId: string | null;
-  /** The active Company record (null in system view / when unknown). */
-  activeCompany: Company | null;
-  /** True when a SuperAdmin session has no company selected. */
-  isSystemView: boolean;
-  /**
-   * Enter a company. SuperAdmin may enter any company; regular users can only
-   * (re)select their own. Seeds the tenant's demo data on first entry.
-   */
-  setActiveCompany: (companyId: string) => void;
-  /** SuperAdmin: leave the current company and return to the system view. */
-  leaveCompany: () => void;
-  /** Re-read the company directory from storage (after create/update). */
-  refreshCompanies: () => void;
-}
-
-const TenantContext = createContext<TenantContextValue | null>(null);
+export type { TenantContextValue } from './useTenant';
 
 /** Is the current session a SuperAdmin? (Read fresh — survives provider ordering.) */
 function sessionIsSuperAdmin(): boolean {
@@ -127,11 +108,4 @@ export function TenantProvider({ children }: { children: ReactNode }) {
   );
 
   return <TenantContext.Provider value={value}>{children}</TenantContext.Provider>;
-}
-
-/** Access the tenant context. Must be used inside <TenantProvider>. */
-export function useTenant(): TenantContextValue {
-  const ctx = useContext(TenantContext);
-  if (!ctx) throw new Error('useTenant must be used within <TenantProvider>');
-  return ctx;
 }

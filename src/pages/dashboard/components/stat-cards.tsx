@@ -9,7 +9,7 @@
  *    balance, own pending claims.
  */
 import { CalendarCheck, CalendarDays, ClipboardCheck, Receipt, Users, Wallet } from 'lucide-react';
-import { useAuth } from '@/lib/authContext';
+import { useAuth } from '@/lib/useAuth';
 import { useCollection } from '@/lib/db';
 import { fmtRM, monthKey } from '@/lib/utils';
 import type {

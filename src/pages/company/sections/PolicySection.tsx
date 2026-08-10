@@ -9,7 +9,7 @@
  * lib/appSettings.ts resolves defaults → Company.config → settings docs —
  * without mirroring, a previously-written doc would shadow the new config.
  */
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { CalendarClock, CalendarHeart, MapPin, ReceiptText } from 'lucide-react';
 import { states, stateInfo } from '@/lib/holidays';
@@ -20,7 +20,8 @@ import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Field, SaveButton, SectionCard, numOr } from '../../settings/shared';
+import { Field, SaveButton, SectionCard } from '../../settings/shared';
+import { numOr } from '../../settings/numOr';
 import { mirrorSettingsDoc, useCompanySetup, useUnsavedGuard, UNSAVED_HINT } from '../store';
 
 type TopupKey = 'annual' | 'sick' | 'hospitalization' | 'maternity' | 'paternity';
@@ -72,12 +73,15 @@ export default function PolicySection() {
   useUnsavedGuard(dirty);
 
   const companyId = company?.id;
-  useEffect(() => {
+  // Company switch → drop the draft + dirty flag; (re)seed once the new
+  // Company record is present. Render-phase adjusts — no effects.
+  const [prevCompanyId, setPrevCompanyId] = useState(companyId);
+  if (prevCompanyId !== companyId) {
+    setPrevCompanyId(companyId);
     setDraft(null);
     setDirty(false);
-  }, [companyId]);
-  useEffect(() => {
-    if (!company || draft) return;
+  }
+  if (company && draft === null) {
     const cfg = company.config;
     setDraft({
       workingWeek: cfg.workingWeek,
@@ -95,7 +99,7 @@ export default function PolicySection() {
         paternity: cfg.leaveTopUps.paternity ?? 0,
       },
     });
-  }, [company, draft]);
+  }
 
   if (!company || !draft) {
     return (

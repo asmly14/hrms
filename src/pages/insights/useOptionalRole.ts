@@ -7,7 +7,7 @@
  * `useAuth()` is called unconditionally every render (hook order is stable);
  * the try/catch only absorbs the "no provider" throw.
  */
-import { useAuth } from '@/lib/authContext';
+import { useAuth } from '@/lib/useAuth';
 import type { AuthRole } from '@/lib/auth';
 
 export function useOptionalRole(): AuthRole | null {

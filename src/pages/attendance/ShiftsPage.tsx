@@ -10,6 +10,7 @@ import { Link } from 'react-router-dom';
 import {
   ArrowLeft, CalendarRange, Pencil, Plus, RefreshCcw, Trash2, Users2,
 } from 'lucide-react';
+import { toast } from 'sonner';
 import { logAudit, useCollection } from '@/lib/db';
 import type { Employee, StateCode } from '@/lib/types';
 import { fmtDate } from '@/lib/utils';
@@ -117,12 +118,14 @@ export default function ShiftsPage() {
         actorName: actorName(auth), action: 'attendance.shift-update', entity: 'shifts',
         entityId: editingId, detail: `Shift updated: ${payload.name} ${payload.startTime}–${payload.endTime}`,
       });
+      toast.success(`Shift updated: ${payload.name}`);
     } else {
       const created = add(payload as Omit<ShiftX, 'id'>);
       logAudit({
         actorName: actorName(auth), action: 'attendance.shift-create', entity: 'shifts',
         entityId: created.id, detail: `Shift created: ${payload.name} ${payload.startTime}–${payload.endTime}`,
       });
+      toast.success(`Shift created: ${payload.name}`);
     }
     setFormOpen(false);
   };
@@ -163,6 +166,7 @@ export default function ShiftsPage() {
         `(${(deleteTarget.employeeIds ?? []).length} assigned unassigned; ` +
         `${deleteRotationRefs.length} rotation plan(s) cleaned; ${deleteAttendanceRefs} historical attendance record(s) keep their stored times)`,
     });
+    toast.success(`Shift deleted: ${deleteTarget.name}`);
     setDeleteId(null);
   };
 
@@ -187,12 +191,14 @@ export default function ShiftsPage() {
         entityId: shiftId,
         detail: `${empName(empId)} assigned to ${shift.name}${other ? ` (moved from ${other.name})` : ''}`,
       });
+      toast.success(`${empName(empId)} assigned to ${shift.name}`);
     } else {
       update(shiftId, { employeeIds: (shift.employeeIds ?? []).filter((id) => id !== empId) });
       logAudit({
         actorName: actorName(auth), action: 'attendance.shift-unassign', entity: 'shifts',
         entityId: shiftId, detail: `${empName(empId)} unassigned from ${shift.name}`,
       });
+      toast.success(`${empName(empId)} unassigned from ${shift.name}`);
     }
   };
 
@@ -212,6 +218,7 @@ export default function ShiftsPage() {
       actorName: actorName(auth), action: 'attendance.rotation-create', entity: 'shifts',
       entityId: plan.id, detail: `Rotation created: ${plan.name} (${plan.employeeIds.length} staff)`,
     });
+    toast.success(`Rotation created: ${plan.name}`);
     setRotOpen(false);
     setRotName('');
     setRotShiftIds([]);
@@ -227,6 +234,7 @@ export default function ShiftsPage() {
       actorName: actorName(auth), action: 'attendance.rotation-delete', entity: 'shifts',
       entityId: id, detail: `Rotation deleted: ${plan?.name ?? id}`,
     });
+    toast.success(`Rotation deleted: ${plan?.name ?? id}`);
   };
 
   const currentShiftOfPlan = (p: RotationPlan): ShiftX | undefined => {

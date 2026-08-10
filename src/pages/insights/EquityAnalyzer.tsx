@@ -129,6 +129,10 @@ export default function EquityAnalyzer() {
   const [deptFilter, setDeptFilter] = useState(ALL_ROLES);
   const [scatterRole, setScatterRole] = useState(ALL_ROLES);
 
+  // "Now" snapshot once per mount keeps render pure (react-hooks/purity);
+  // service-year drift within a page visit is immaterial.
+  const [nowMs] = useState(() => Date.now());
+
   const rows = useMemo<EquityRow[]>(
     () =>
       employees
@@ -136,7 +140,7 @@ export default function EquityAnalyzer() {
         .map((e) => {
           const pos = positions.find((p) => p.id === e.positionId);
           const dept = departments.find((d) => d.id === e.departmentId);
-          const years = Math.round(((Date.now() - Date.parse(e.joinDate)) / (365.25 * 86_400_000)) * 10) / 10;
+          const years = Math.round(((nowMs - Date.parse(e.joinDate)) / (365.25 * 86_400_000)) * 10) / 10;
           const title = pos?.title ?? 'Staff';
           const s = suggestSalary(normalizeTitle(title), years, e.state, dept?.name);
           const compa = s.median > 0 ? e.baseSalary / s.median : 1;
@@ -155,7 +159,7 @@ export default function EquityAnalyzer() {
           };
         })
         .sort((a, b) => a.compa - b.compa),
-    [employees, positions, departments],
+    [employees, positions, departments, nowMs],
   );
 
   const filtered = useMemo(

@@ -11,6 +11,7 @@
  */
 import { useMemo, useState } from 'react';
 import { AlertTriangle, Check, CheckCheck, Inbox, Paperclip, ShieldAlert, X } from 'lucide-react';
+import { toast } from 'sonner';
 import type { Department, Employee } from '@/lib/types';
 import { logAudit, useCollection } from '@/lib/db';
 import { avatarTone, cn, fmtDate, fmtRM, initialsOf, round2 } from '@/lib/utils';
@@ -165,6 +166,11 @@ export default function ApproverInbox({
         detail: `${targets.length} claims approved in bulk, ${fmtRM(round2(targets.reduce((s, c) => s + c.amount, 0)))} total`,
       });
     }
+    toast.success(
+      targets.length > 1
+        ? `${targets.length} claims approved — ${fmtRM(round2(targets.reduce((s, c) => s + c.amount, 0)))} total`
+        : `Claim approved for ${empById.get(targets[0].employeeId)?.name ?? targets[0].employeeId} — ${fmtRM(targets[0].amount)}`,
+    );
     setSelected(new Set());
     setDialog(null);
   }
@@ -191,6 +197,7 @@ export default function ApproverInbox({
       entityId: c.id,
       detail: `${categoryMetaOf(c).label} — ${fmtRM(c.amount)} for ${empById.get(c.employeeId)?.name ?? c.employeeId} · ${note}`,
     });
+    toast.success(`Claim rejected for ${empById.get(c.employeeId)?.name ?? c.employeeId} — ${fmtRM(c.amount)}`);
     setDialog(null);
   }
 

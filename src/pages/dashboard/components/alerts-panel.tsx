@@ -8,7 +8,7 @@
  */
 import { Link } from 'react-router-dom';
 import { AlertTriangle, CircleCheck, Globe, Hourglass, Timer, Wallet } from 'lucide-react';
-import { useAuth } from '@/lib/authContext';
+import { useAuth } from '@/lib/useAuth';
 import { useCollection } from '@/lib/db';
 import { MAX_OT_HOURS_MONTH, MINIMUM_WAGE } from '@/lib/statutory';
 import { daysBetween, fmtRM, monthKey, round2 } from '@/lib/utils';

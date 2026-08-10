@@ -85,19 +85,22 @@ export default function BrandingSection() {
   useUnsavedGuard(dirty);
 
   const companyId = company?.id;
-  useEffect(() => {
+  // Company switch → drop the draft + dirty flag; (re)seed once the new
+  // Company record is present. Render-phase adjusts — no effects.
+  const [prevCompanyId, setPrevCompanyId] = useState(companyId);
+  if (prevCompanyId !== companyId) {
+    setPrevCompanyId(companyId);
     setDraft(null);
     setDirty(false);
-  }, [companyId]);
-  useEffect(() => {
-    if (!company || draft) return;
+  }
+  if (company && draft === null) {
     setDraft({
       logoText: company.branding.logoText,
       accentColor: company.branding.accentColor,
       employeeIdPrefix: company.config.numberFormats.employeeIdPrefix,
       payslipPrefix: company.config.numberFormats.payslipPrefix,
     });
-  }, [company, draft]);
+  }
 
   // Live-apply the draft accent so the admin sees the REAL app re-theme
   // (sidebar, buttons) while choosing — not just the mock below.

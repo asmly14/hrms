@@ -8,6 +8,7 @@
  * public addUserAccount() is added to lib/auth later, switch to it.
  */
 import { findUser, type UserAccount } from '@/lib/auth';
+import bcrypt from 'bcryptjs';
 import { getCollection } from '@/lib/db';
 import { fmtDate } from '@/lib/utils';
 import type { AuditLog, Company, CompanyPlan, Employee, ModuleKey } from '@/lib/types';
@@ -81,7 +82,7 @@ export function generateCompanyId(code: string, existing: Company[]): string {
   return id;
 }
 
-// ── Mock-auth account directory (demo only — plaintext, see lib/auth.ts) ─────
+// ── Mock-auth account directory (demo only — bcrypt-hashed, see lib/auth.ts) ─
 
 const USERS_KEY = 'hrms.users';
 
@@ -91,16 +92,19 @@ export function usernameAvailable(username: string): boolean {
 }
 
 /**
- * Append an account to the global mock-auth directory. Returns false when the
- * username is already taken (nothing written). Direct localStorage write —
- * see the contract note at the top of this file.
+ * Append an account to the global mock-auth directory, storing a bcrypt hash
+ * of the password (same cost factor as lib/auth.ts) — never the plaintext.
+ * Returns false when the username is already taken (nothing written). Direct
+ * localStorage write — see the contract note at the top of this file.
  */
-export function addUserAccount(account: UserAccount): boolean {
+export function addUserAccount(account: Omit<UserAccount, 'passwordHash'> & { password: string }): boolean {
   if (!usernameAvailable(account.username)) return false;
   try {
     const raw = localStorage.getItem(USERS_KEY);
     const users = raw ? (JSON.parse(raw) as UserAccount[]) : [];
-    localStorage.setItem(USERS_KEY, JSON.stringify([...users, account]));
+    const { password, ...rest } = account;
+    const stored: UserAccount = { ...rest, passwordHash: bcrypt.hashSync(password, 8) };
+    localStorage.setItem(USERS_KEY, JSON.stringify([...users, stored]));
     return true;
   } catch {
     return false; // storage unavailable / full — non-fatal in demo mode

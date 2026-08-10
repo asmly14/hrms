@@ -3,7 +3,7 @@
  * statutory numbers (EPF / SOCSO / tax from the core Settings singleton;
  * HRD Corp reg no from the extended settings record).
  */
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Building2, Landmark } from 'lucide-react';
 import { logAudit } from '@/lib/db';
@@ -33,22 +33,19 @@ export default function CompanySection() {
 
   // Initialise once BOTH source records are present so the draft never
   // clobbers an in-flight edit and never seeds from a partial load.
-  useEffect(() => {
-    if (company && companyExtras) {
-      setDraft((prev) =>
-        prev ?? {
-          companyName: company.companyName,
-          companyRegNo: company.companyRegNo,
-          address: company.address,
-          hqState: company.hqState,
-          epfEmployerNo: company.epfEmployerNo,
-          socsoEmployerNo: company.socsoEmployerNo,
-          taxEmployerNo: company.taxEmployerNo,
-          hrdCorpRegNo: companyExtras.hrdCorpRegNo,
-        },
-      );
-    }
-  }, [company, companyExtras]);
+  // Render-phase adjust on draft===null — no effect.
+  if (company && companyExtras && draft === null) {
+    setDraft({
+      companyName: company.companyName,
+      companyRegNo: company.companyRegNo,
+      address: company.address,
+      hqState: company.hqState,
+      epfEmployerNo: company.epfEmployerNo,
+      socsoEmployerNo: company.socsoEmployerNo,
+      taxEmployerNo: company.taxEmployerNo,
+      hrdCorpRegNo: companyExtras.hrdCorpRegNo,
+    });
+  }
 
   if (!company || !draft) {
     return (

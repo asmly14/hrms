@@ -16,25 +16,9 @@ import {
 } from '@/components/ui/select';
 import { Field, StepIntro } from '../fields';
 import type { FormErrors, OnboardFormState } from '../formState';
-
-/** Common Malaysian banks for the datalist (free text still allowed). */
-export const MY_BANKS = [
-  'Maybank',
-  'CIMB Bank',
-  'Public Bank',
-  'RHB Bank',
-  'Hong Leong Bank',
-  'AmBank',
-  'Bank Islam',
-  'Bank Rakyat',
-  'OCBC Bank',
-  'HSBC Bank',
-  'Standard Chartered',
-  'UOB Malaysia',
-  'Alliance Bank',
-  'Affin Bank',
-  'GXBank',
-];
+// Single source of truth for the Malaysian bank datalist (shared with the
+// employee form) — see src/pages/employees/helpers.ts.
+import { MY_BANKS } from '@/pages/employees/helpers';
 
 interface Props {
   form: OnboardFormState;

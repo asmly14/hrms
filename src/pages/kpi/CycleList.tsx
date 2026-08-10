@@ -21,6 +21,7 @@ import { Link } from 'react-router-dom';
 import {
   ArrowRight, CalendarRange, ChevronRight, ListChecks, Lock, Plus,
 } from 'lucide-react';
+import { toast } from 'sonner';
 import { logAudit, useCollection } from '@/lib/db';
 import { cn } from '@/lib/utils';
 import type { Department, Employee, Position } from '@/lib/types';
@@ -300,6 +301,9 @@ export default function CycleList({ employees, departments, kpis, reviews }: Pro
       actorName: auth?.user?.username ?? 'KPI module', action: 'kpi.cycleCreate', entity: 'cycles', entityId: cycle.id,
       detail: `${cycle.name} (${p}): ${reviewCreated} reviews, ${kpiCreated} KPIs across ${deptIds.length} departments${skipped ? ` · ${skipped} skipped (existing review/weight conflict)` : ''}`,
     });
+    toast.success(`Cycle “${cycle.name}” created for ${p}`, {
+      description: `${reviewCreated} reviews · ${kpiCreated} KPIs across ${deptIds.length} department${deptIds.length === 1 ? '' : 's'}${skipped ? ` · ${skipped} employee${skipped === 1 ? '' : 's'} skipped (existing review)` : ''}`,
+    });
     setOpen(false);
     setName('');
     setDeptIds([]);
@@ -314,7 +318,10 @@ export default function CycleList({ employees, departments, kpis, reviews }: Pro
       (r) => countFor(r.employeeId, r.period),
     );
     const guard = canAdvanceStage(cycle, stats);
-    if (!guard.ok) return;
+    if (!guard.ok) {
+      toast.error(`Cannot advance “${cycle.name}”`, { description: guard.reason });
+      return;
+    }
     const now = new Date().toISOString();
     updateCycle(cycle.id, {
       stage: next,
@@ -323,6 +330,9 @@ export default function CycleList({ employees, departments, kpis, reviews }: Pro
     logAudit({
       actorName: auth?.user?.username ?? 'KPI module', action: 'kpi.cycleStage', entity: 'cycles', entityId: cycle.id,
       detail: `${cycle.name}: ${CYCLE_STAGE_LABELS[cycle.stage]} → ${CYCLE_STAGE_LABELS[next]}`,
+    });
+    toast.success(`“${cycle.name}” advanced to ${CYCLE_STAGE_LABELS[next]}`, {
+      description: `${CYCLE_STAGE_LABELS[cycle.stage]} → ${CYCLE_STAGE_LABELS[next]} · ${stats.total} review${stats.total === 1 ? '' : 's'} in cycle`,
     });
   }
 

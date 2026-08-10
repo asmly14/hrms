@@ -10,7 +10,7 @@
  * Hook-order safe: the underlying `useContext` runs unconditionally on every
  * render before any throw, so the call shape never changes between renders.
  */
-import { useAuth, type AuthContextValue } from '@/lib/authContext';
+import { useAuth, type AuthContextValue } from '@/lib/useAuth';
 
 export function useAuthSafe(): AuthContextValue | null {
   try {

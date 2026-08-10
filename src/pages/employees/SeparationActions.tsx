@@ -23,6 +23,7 @@ import {
   UserMinus,
 } from 'lucide-react';
 import type { Claim, Employee, LeaveBalance, Payslip } from '@/lib/types';
+import { toast } from 'sonner';
 import { getCollection } from '@/lib/db';
 import {
   computeFinalPay,
@@ -196,6 +197,9 @@ function ResignDialog({ targets, actorName, open, onOpenChange, onCompleted }: D
     );
     setResult(r);
     setPhase('done');
+    toast.success(
+      `${r.succeeded.length} resigned${r.skipped.length > 0 ? ` · ${r.skipped.length} skipped` : ''}`,
+    );
   }
 
   function close(next: boolean) {
@@ -356,6 +360,9 @@ function VssDialog({ targets, actorName, open, onOpenChange, onCompleted }: Dial
     );
     setResult(r);
     setPhase('done');
+    toast.success(
+      `${r.succeeded.length} separated via VSS${r.skipped.length > 0 ? ` · ${r.skipped.length} skipped` : ''}`,
+    );
   }
 
   function close(next: boolean) {
@@ -523,6 +530,9 @@ function OtherSeparationDialog({ targets, actorName, open, onOpenChange, onCompl
     );
     setResult(r);
     setPhase('done');
+    toast.success(
+      `${r.succeeded.length} separated${r.skipped.length > 0 ? ` · ${r.skipped.length} skipped` : ''}`,
+    );
   }
 
   function close(next: boolean) {
@@ -650,6 +660,9 @@ function DeleteDialog({ targets, actorName, open, onOpenChange, onCompleted }: D
     ];
     setResult(r);
     setPhase('done');
+    toast.success(
+      `${r.succeeded.length} deleted permanently${r.skipped.length > 0 ? ` · ${r.skipped.length} skipped` : ''}`,
+    );
   }
 
   function close(next: boolean) {

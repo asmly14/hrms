@@ -11,7 +11,8 @@ import { useNavigate } from 'react-router-dom';
 import {
   CalendarDays, Check, CircleDollarSign, Database, Minus, RotateCcw,
 } from 'lucide-react';
-import { useTenant } from '@/lib/tenantContext';
+import { useTenant } from '@/lib/useTenant';
+import { toast } from 'sonner';
 import { seedTenantIfEmpty } from '@/lib/db';
 import { DEMO_COMPANY_IDS } from '@/lib/tenants';
 import {
@@ -84,6 +85,9 @@ export default function SystemSection() {
     window.setTimeout(() => {
       refreshCompanies();
       setFeedback('done');
+      toast.success(`${target.name} reseeded`, {
+        description: 'Demo dataset refreshed — the tenant was re-initialised from seed data.',
+      });
       window.setTimeout(() => setFeedback('idle'), 4000);
     }, 800);
   };

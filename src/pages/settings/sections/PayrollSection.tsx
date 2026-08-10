@@ -8,7 +8,7 @@
  * mirrors the values back into the settings docs this section edits — so
  * this editor keeps working and the two never diverge.
  */
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { BadgePercent, CalendarClock, ReceiptText } from 'lucide-react';
 import { logAudit, useCollection } from '@/lib/db';
@@ -19,7 +19,8 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
-import { DEMO_ACTOR, Field, SaveButton, SectionCard, numOr } from '../shared';
+import { DEMO_ACTOR, Field, SaveButton, SectionCard } from '../shared';
+import { numOr } from '../numOr';
 import { useSettingsData } from '../store';
 
 interface Draft {
@@ -33,17 +34,15 @@ export default function PayrollSection() {
   const { items: employees } = useCollection<Employee>('employees');
   const [draft, setDraft] = useState<Draft | null>(null);
 
-  useEffect(() => {
-    if (company && payrollPolicy) {
-      setDraft((prev) =>
-        prev ?? {
-          cutoffDay: String(payrollPolicy.cutoffDay),
-          paydayDay: String(company.paydayDay),
-          workingDaysBasis: String(payrollPolicy.workingDaysBasis),
-        },
-      );
-    }
-  }, [company, payrollPolicy]);
+  // Initialise once BOTH source records are present so the draft never
+  // clobbers an in-flight edit. Render-phase adjust on draft===null — no effect.
+  if (company && payrollPolicy && draft === null) {
+    setDraft({
+      cutoffDay: String(payrollPolicy.cutoffDay),
+      paydayDay: String(company.paydayDay),
+      workingDaysBasis: String(payrollPolicy.workingDaysBasis),
+    });
+  }
 
   // ── HRD Corp levy auto-detection — live from the employees collection ──
   const localEmployees = employees.filter((e) => !e.isForeignWorker && e.status !== 'resigned');

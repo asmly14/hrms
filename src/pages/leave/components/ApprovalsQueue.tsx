@@ -15,6 +15,7 @@
  */
 import { useMemo, useState } from 'react';
 import { Ban, CalendarOff, Check, ClipboardCheck, ShieldAlert, X } from 'lucide-react';
+import { toast } from 'sonner';
 import { logAudit, type CollectionApi } from '@/lib/db';
 import { avatarTone, fmtDate, initialsOf } from '@/lib/utils';
 import type { Employee, LeaveBalance, LeaveStatus } from '@/lib/types';
@@ -168,6 +169,11 @@ export default function ApprovalsQueue({ employees, leavesApi, balancesApi }: Pr
       entityId: request.id,
       detail: `${name} — ${LEAVE_TYPE_META[request.type].label} ${request.days}d (${request.startDate} → ${request.endDate})${remarks.trim() ? ` · ${remarks.trim()}` : ''}`,
     });
+    toast.success(
+      action === 'approved'
+        ? `Leave approved for ${name}`
+        : `Leave rejected for ${name}`,
+    );
     setDecision(null);
     setRemarks('');
   };
@@ -195,6 +201,7 @@ export default function ApprovalsQueue({ employees, leavesApi, balancesApi }: Pr
       entityId: cancelReq.id,
       detail: `${name} — ${LEAVE_TYPE_META[cancelReq.type].label} ${cancelReq.days}d (${cancelReq.startDate} → ${cancelReq.endDate}) cancelled; ${cancelReq.days}d restored to balance${remarks.trim() ? ` · ${remarks.trim()}` : ''}`,
     });
+    toast.success(`Leave cancelled for ${name} — ${cancelReq.days}d restored to balance`);
     setCancelReq(null);
     setRemarks('');
   };

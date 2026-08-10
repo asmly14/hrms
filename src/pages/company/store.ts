@@ -14,8 +14,9 @@
  * diverge (see `mirrorSettingsDoc` / `mirrorCompanySingleton`).
  */
 import { useEffect } from 'react';
+import { toast } from 'sonner';
 import { getCollection, logAudit, setCollection, upsertCompany } from '@/lib/db';
-import { useTenant } from '@/lib/tenantContext';
+import { useTenant } from '@/lib/useTenant';
 import type { Company } from '@/lib/types';
 
 /** Actor name stamped on audit entries made from the Company Setup module. */
@@ -80,6 +81,7 @@ export function useCompanySetup(): CompanySetupApi {
       entityId: next.id,
       detail: auditDetail,
     });
+    toast.success(auditDetail);
   };
 
   return { company: activeCompany, isSystemView, save };

@@ -15,7 +15,7 @@
 import { useMemo, useState } from 'react';
 import { Link, Navigate, useParams } from 'react-router-dom';
 import { AlertTriangle, ArrowLeft, FileWarning, Printer, ShieldCheck, UserX } from 'lucide-react';
-import { useAuth } from '@/lib/authContext';
+import { useAuth } from '@/lib/useAuth';
 import { useCollection } from '@/lib/db';
 import { stateInfo } from '@/lib/holidays';
 import {

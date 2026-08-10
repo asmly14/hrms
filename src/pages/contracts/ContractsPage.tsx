@@ -16,7 +16,7 @@ import {
 } from 'lucide-react';
 import type { Employee } from '@/lib/types';
 import { useCollection } from '@/lib/db';
-import { useAuth } from '@/lib/authContext';
+import { useAuth } from '@/lib/useAuth';
 import {
   CONTRACT_STATUS_LABELS,
   contractStats,

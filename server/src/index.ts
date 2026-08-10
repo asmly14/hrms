@@ -20,4 +20,9 @@ async function main(): Promise<void> {
   process.on('SIGTERM', () => void shutdown('SIGTERM'));
 }
 
-void main();
+// Boot failures (e.g. assertProductionConfig refusing an insecure production
+// secret) land here — log and exit non-zero instead of an unhandled rejection.
+main().catch((err) => {
+  console.error(err instanceof Error ? err.message : err);
+  process.exit(1);
+});

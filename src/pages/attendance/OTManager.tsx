@@ -10,6 +10,7 @@
  */
 import { useMemo, useState } from 'react';
 import { AlertTriangle, Check, Hourglass, Timer, X } from 'lucide-react';
+import { toast } from 'sonner';
 import { logAudit, useCollection } from '@/lib/db';
 import type { Employee } from '@/lib/types';
 import { fmtDate, fmtRM, monthKey, round2 } from '@/lib/utils';
@@ -77,17 +78,18 @@ export default function OTManager() {
   const overThreshold = emp ? emp.baseSalary > OT_SALARY_THRESHOLD : false;
 
   // Month OT totals (approved + pending) for the 104h cap enforcement.
-  const monthOT = useMemo(() => {
-    if (!emp) return { approved: 0, pending: 0 };
-    let approved = 0;
-    let pending = 0;
+  // Plain derivation (no manual memoization — the React Compiler flags the
+  // hand-rolled deps here and the loop is trivially cheap).
+  let otApprovedSum = 0;
+  let otPendingSum = 0;
+  if (emp) {
     attendance.forEach((a) => {
       if (a.employeeId !== emp.id || !a.date.startsWith(month)) return;
-      if (a.otApproved) approved += a.otHours || 0;
-      else if (a.otRequested && !a.otRejected) pending += a.otHours || 0;
+      if (a.otApproved) otApprovedSum += a.otHours || 0;
+      else if (a.otRequested && !a.otRejected) otPendingSum += a.otHours || 0;
     });
-    return { approved: round2(approved), pending: round2(pending) };
-  }, [attendance, emp, month]);
+  }
+  const monthOT = { approved: round2(otApprovedSum), pending: round2(otPendingSum) };
 
   const wouldExceedCap = monthOT.approved + monthOT.pending + hrs > MAX_OT_HOURS_MONTH;
 
@@ -132,6 +134,7 @@ export default function OTManager() {
     // B19 fix: no OT requests for future dates.
     if (futureDate) {
       setNotice('OT cannot be requested for a future date. Submit after the work is done.');
+      toast.error('OT cannot be requested for a future date.');
       return;
     }
     // B3 fix: hard block — the 104h/month cap is not advisory.
@@ -140,6 +143,7 @@ export default function OTManager() {
         `Blocked: this request would exceed the ${MAX_OT_HOURS_MONTH}h monthly OT cap for ${month}. ` +
           'Split the work across months or ask HR for a Labour Department exemption.',
       );
+      toast.error(`This request would exceed the ${MAX_OT_HOURS_MONTH}h monthly OT cap for ${month}.`);
       return;
     }
     const note = `OT request: ${reason.trim() || '—'} (${DAYTYPE_LABEL[dayType]})`;
@@ -161,6 +165,7 @@ export default function OTManager() {
 
     if (approvedSameDay) {
       setNotice(`OT for ${fmtDate(date)} is already approved — contact HR if the hours need to change.`);
+      toast.error(`OT for ${fmtDate(date)} is already approved.`);
       return;
     }
     if (pendingSameDay) {
@@ -226,6 +231,7 @@ export default function OTManager() {
       });
     }
     setNotice(`OT request submitted for ${emp.name} — ${hrs}h on ${fmtDate(date)}. A manager must approve it before it is paid.`);
+    toast.success(`OT request submitted for ${emp.name} — ${hrs}h on ${fmtDate(date)}`);
     setReason('');
     setHours('2');
   };
@@ -235,6 +241,7 @@ export default function OTManager() {
     // Self-approval is never allowed — a second pair of eyes must decide.
     if (selfId && rec.employeeId === selfId) {
       setNotice('You cannot approve or reject your own OT request — another manager or HR must decide.');
+      toast.error('You cannot approve or reject your own OT request.');
       return;
     }
     // B3 fix: re-check the 104h monthly cap at approval time, per employee.
@@ -243,6 +250,7 @@ export default function OTManager() {
         `Blocked: approving ${rec.otHours}h would push ${empName(rec.employeeId)} past the ` +
           `${MAX_OT_HOURS_MONTH}h monthly OT cap for ${rec.date.slice(0, 7)}.`,
       );
+      toast.error(`Approving would push ${empName(rec.employeeId)} past the ${MAX_OT_HOURS_MONTH}h monthly OT cap.`);
       return;
     }
     update(rec.id, approve
@@ -255,6 +263,11 @@ export default function OTManager() {
       entityId: rec.id,
       detail: `${empName(rec.employeeId)} ${rec.otHours}h OT on ${rec.date} ${approve ? 'approved' : 'rejected'}`,
     });
+    toast.success(
+      approve
+        ? `OT approved for ${empName(rec.employeeId)} — ${rec.otHours}h on ${fmtDate(rec.date)}`
+        : `OT rejected for ${empName(rec.employeeId)} — ${rec.otHours}h on ${fmtDate(rec.date)}`,
+    );
   };
 
   if (employees.length === 0) {

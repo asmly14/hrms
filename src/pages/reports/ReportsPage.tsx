@@ -13,7 +13,7 @@
  * Until AuthProvider is wired into App.tsx (integration wave) the page falls
  * back to the pre-auth demo behavior (unrestricted Admin view).
  */
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   CalendarCheck,
   Download,
@@ -28,7 +28,7 @@ import {
 import type { LucideIcon } from 'lucide-react';
 import { useCollection } from '@/lib/db';
 import { runPayroll } from '@/lib/payrollEngine';
-import { useAuth, type AuthContextValue } from '@/lib/authContext';
+import { useAuth, type AuthContextValue } from '@/lib/useAuth';
 import type { AuthRole } from '@/lib/auth';
 import { cn, monthKey } from '@/lib/utils';
 import type {
@@ -78,7 +78,8 @@ import ReportPreview from './ReportPreview';
  */
 function useReportsAuth(): AuthContextValue | null {
   try {
-    // eslint-disable-next-line react-hooks/rules-of-hooks -- useContext inside useAuth always runs before the no-provider throw, so hook order stays stable
+    // useContext inside useAuth always runs before the no-provider throw, so
+    // hook order stays stable across the try/catch.
     return useAuth();
   } catch {
     return null;
@@ -161,7 +162,7 @@ export default function ReportsPage() {
     [auth],
   );
   const scopeByEmployee = useMemo(
-    () => auth?.scopeByEmployee ?? (<T,>(list: T[], _getEmpId: (item: T) => string): T[] => list),
+    () => auth?.scopeByEmployee ?? (<T,>(list: T[]): T[] => list),
     [auth],
   );
   const scopedEmployees = useMemo(() => scopeEmployees(employees), [employees, scopeEmployees]);
@@ -204,7 +205,7 @@ export default function ReportsPage() {
     return [...set].sort().reverse();
   }, [attendance, payslips, runs]);
 
-  const buildById = (id: ReportId): BuiltReport => {
+  const buildById = useCallback((id: ReportId): BuiltReport => {
     switch (id) {
       case 'attendance':
         return buildAttendanceReport(month, scopedEmployees, departments, scopedAttendance, shifts);
@@ -217,20 +218,9 @@ export default function ReportsPage() {
       default:
         return buildHeadcountReport(scopedEmployees, departments);
     }
-  };
+  }, [month, scopedEmployees, departments, scopedAttendance, shifts, scopedLeaveBalances, scopedPayslips, runs, settings]);
 
-  const report = useMemo(() => buildById(selected), [
-    selected,
-    month,
-    scopedEmployees,
-    departments,
-    scopedAttendance,
-    shifts,
-    scopedLeaveBalances,
-    scopedPayslips,
-    runs,
-    settings,
-  ]);
+  const report = useMemo(() => buildById(selected), [selected, buildById]);
 
   const meta = visibleMeta.find((m) => m.id === selected) ?? visibleMeta[0];
   // Seed-flash guard: also treat "seed flag absent" as loading so the empty

@@ -9,7 +9,7 @@
  * The hook call itself is unconditional, so hook order is preserved.
  * (Same pattern as `pages/payroll/useAuthSafe.ts`.)
  */
-import { useAuth, type AuthContextValue } from '@/lib/authContext';
+import { useAuth, type AuthContextValue } from '@/lib/useAuth';
 
 export function useAuthSafe(): AuthContextValue | null {
   try {

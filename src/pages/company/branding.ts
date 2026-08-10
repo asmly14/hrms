@@ -23,7 +23,7 @@
  * (e.g. "32 85% 38%"), so the hex branding color is converted before writing.
  */
 import { useEffect } from 'react';
-import { useTenant } from '@/lib/tenantContext';
+import { useTenant } from '@/lib/useTenant';
 import type { CompanyBranding } from '@/lib/types';
 
 export interface Hsl {

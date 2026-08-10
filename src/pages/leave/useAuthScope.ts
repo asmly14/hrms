@@ -12,8 +12,8 @@
  *   - Manager    → own department only.
  *   - Employee   → own records only (fail closed when unlinked).
  */
-import { useAuth, type AuthContextValue } from '@/lib/authContext';
-import { useRole, type AppRole } from '@/lib/roleContext';
+import { useAuth, type AuthContextValue } from '@/lib/useAuth';
+import { useRole, type AppRole } from '@/lib/useRole';
 import type { Employee } from '@/lib/types';
 
 export interface AuthScope {
@@ -35,9 +35,9 @@ export interface AuthScope {
 }
 
 const permissive = {
-  canViewEmployee: (_id: string) => true,
+  canViewEmployee: () => true,
   scopeEmployees: (list: Employee[]) => list,
-  scopeByEmployee: <T,>(list: T[], _getEmpId: (item: T) => string) => list,
+  scopeByEmployee: <T,>(list: T[]) => list,
 };
 
 function build(role: AppRole, employeeId: string | null, scoped: boolean, auth: AuthContextValue | null): AuthScope {

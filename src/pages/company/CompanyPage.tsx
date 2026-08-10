@@ -16,7 +16,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { useTenant } from '@/lib/tenantContext';
+import { useTenant } from '@/lib/useTenant';
 import { cn } from '@/lib/utils';
 import { useCompanyBranding } from './branding';
 import BrandingSection from './sections/BrandingSection';

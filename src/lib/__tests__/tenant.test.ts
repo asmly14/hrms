@@ -204,14 +204,40 @@ describe('tenant-aware auth', () => {
     const users = seedUsers();
     const a = users.find((u) => u.employeeId === 'a-emp');
     const b = users.find((u) => u.employeeId === 'b-emp');
-    expect(a).toMatchObject({ role: 'Employee', companyId: CO_A, password: DEMO_PASSWORD });
+    expect(a).toMatchObject({ role: 'Employee', companyId: CO_A });
     expect(b).toMatchObject({ role: 'Employee', companyId: CO_B });
+    // Passwords are stored as bcrypt hashes — never plaintext at rest.
+    expect(a?.passwordHash).toMatch(/^\$2[aby]\$\d{2}\$/);
+    expect(a?.password).toBeUndefined();
 
     // Each can only log into their own tenant.
     expect(login(a!.username, DEMO_PASSWORD).ok).toBe(true);
     expect(getSession()?.companyId).toBe(CO_A);
     expect(login(b!.username, DEMO_PASSWORD).ok).toBe(true);
     expect(getSession()?.companyId).toBe(CO_B);
+  });
+
+  it('migrates legacy plaintext accounts to bcrypt on first successful login', () => {
+    // Simulate a directory entry written before hashing shipped.
+    seedUsers();
+    const legacy = {
+      id: 'user-legacy', username: 'legacy.user', password: 'oldpass1',
+      role: 'Employee' as const, companyId: CO_A,
+    };
+    const users = JSON.parse(localStorage.getItem('hrms.users')!) as unknown[];
+    users.push(legacy);
+    localStorage.setItem('hrms.users', JSON.stringify(users));
+
+    expect(login('legacy.user', 'oldpass1').ok).toBe(true);
+
+    // After migration the plaintext is gone and only the hash remains.
+    const stored = findUser('legacy.user');
+    expect(stored?.password).toBeUndefined();
+    expect(stored?.passwordHash).toMatch(/^\$2[aby]\$\d{2}\$/);
+
+    // Verification now runs against the hash: wrong fails, right passes.
+    expect(login('legacy.user', 'wrong-pass').ok).toBe(false);
+    expect(login('legacy.user', 'oldpass1').ok).toBe(true);
   });
 });
 

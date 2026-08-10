@@ -13,10 +13,10 @@
  * the same rules so the demo keeps working.
  */
 import { useEffect, useMemo, useState } from 'react';
-import { Info, Plus, Receipt, ScanLine, UserRound } from 'lucide-react';
+import { Info, Plus, Receipt, UserRound } from 'lucide-react';
 import type { Employee } from '@/lib/types';
 import { useCollection } from '@/lib/db';
-import { useRole } from '@/lib/roleContext';
+import { useRole } from '@/lib/useRole';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -34,8 +34,8 @@ import { useAuthSafe } from './useAuthSafe';
 import {
   resolvePolicy, type ClaimPolicyDoc, type ClaimRecord,
 } from './claimPolicy';
+import { getActingAsId, setActingAsId as persistActingAsId } from './actingAsStorage';
 
-const ACTING_AS_KEY = 'myhrms:claims:actingAs';
 const DEFAULT_EMP_ID = 'emp-13'; // Deepak (Sales) — a frequent claimant in the seed data
 
 export default function ClaimsPage() {
@@ -50,13 +50,10 @@ export default function ClaimsPage() {
   const { items: employees } = useCollection<Employee>('employees');
   const { items: settingsDocs } = useCollection<ClaimPolicyDoc>('settings');
 
-  const [actingAsId, setActingAsId] = useState<string>(() => {
-    try {
-      return localStorage.getItem(ACTING_AS_KEY) || DEFAULT_EMP_ID;
-    } catch {
-      return DEFAULT_EMP_ID;
-    }
-  });
+  const [actingAsId, setActingAsId] = useState<string>(
+    // Per-tenant pointer (audit L2) — see actingAsStorage.ts.
+    () => getActingAsId() || DEFAULT_EMP_ID,
+  );
   const [tab, setTab] = useState<'my' | 'approvals'>('my');
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<ClaimRecord | null>(null);
@@ -70,17 +67,14 @@ export default function ClaimsPage() {
   const loading = grace && employees.length === 0;
 
   // Role downgraded to Employee while viewing the approvals tab → bounce back.
+  // Render-phase adjust (single conditional setState) — no effect needed.
   const canApprove = role !== 'Employee';
-  useEffect(() => {
-    if (!canApprove) setTab('my');
-  }, [canApprove]);
+  if (!canApprove && tab !== 'my') {
+    setTab('my');
+  }
 
   useEffect(() => {
-    try {
-      localStorage.setItem(ACTING_AS_KEY, actingAsId);
-    } catch {
-      /* ignore */
-    }
+    persistActingAsId(actingAsId); // per-tenant key (audit L2)
   }, [actingAsId]);
 
   // Legacy demo identity — only consulted while no auth session exists.
@@ -214,17 +208,6 @@ export default function ClaimsPage() {
               </Select>
             </div>
           )}
-          <Tooltip>
-            <TooltipTrigger asChild>
-              {/* span wrapper keeps the tooltip alive on the disabled button */}
-              <span>
-                <Button variant="outline" disabled>
-                  <ScanLine className="h-4 w-4" /> Scan receipt
-                </Button>
-              </span>
-            </TooltipTrigger>
-            <TooltipContent>Coming soon — OCR will pre-fill claims from receipt photos</TooltipContent>
-          </Tooltip>
           <Tooltip>
             <TooltipTrigger asChild>
               <span>

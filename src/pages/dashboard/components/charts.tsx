@@ -11,7 +11,7 @@ import {
   Pie, PieChart, XAxis, YAxis,
 } from 'recharts';
 import { BarChart3, CalendarClock, Donut, TrendingUp } from 'lucide-react';
-import { useAuth } from '@/lib/authContext';
+import { useAuth } from '@/lib/useAuth';
 import { useCollection } from '@/lib/db';
 import { fmtRM, round2 } from '@/lib/utils';
 import type { AttendanceRecord, Claim, Department, Employee, PayrollRun } from '@/lib/types';

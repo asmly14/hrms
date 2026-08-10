@@ -3,8 +3,9 @@
  * km × rate mileage calculator, soft per-claim policy-limit warnings, and a
  * receipt upload placeholder (file label only — no binary is stored).
  */
-import { useEffect, useMemo, useState } from 'react';
+import { useState } from 'react';
 import { AlertTriangle, Calculator, Paperclip, Receipt, X } from 'lucide-react';
+import { toast } from 'sonner';
 import type { Employee } from '@/lib/types';
 import { logAudit, useCollection } from '@/lib/db';
 import { fmtRM, round2 } from '@/lib/utils';
@@ -55,27 +56,32 @@ export default function ClaimFormDialog({ open, onOpenChange, employee, claims, 
   const [touched, setTouched] = useState(false);
 
   // Reset (or hydrate, when editing a draft) every time the dialog opens.
-  useEffect(() => {
-    if (!open) return;
-    setTouched(false);
-    if (editing) {
-      setCategory(categoryMetaOf(editing).id);
-      setClaimDate(editing.claimDate);
-      setDescription(editing.title);
-      setAmountStr(String(editing.amount));
-      setKmStr(editing.mileageKm != null ? String(editing.mileageKm) : '');
-      setRateStr(editing.mileageRate != null ? String(editing.mileageRate) : String(policy.mileageRatePerKm));
-      setReceiptName(editing.receiptName);
-    } else {
-      setCategory('travel');
-      setClaimDate(todayIso());
-      setDescription('');
-      setAmountStr('');
-      setKmStr('');
-      setRateStr(String(policy.mileageRatePerKm));
-      setReceiptName(undefined);
+  // Render-phase adjust keyed on (open, editing) — no cascading effect.
+  const formKey = open ? (editing?.id ?? 'new') : 'closed';
+  const [prevFormKey, setPrevFormKey] = useState(formKey);
+  if (formKey !== prevFormKey) {
+    setPrevFormKey(formKey);
+    if (open) {
+      setTouched(false);
+      if (editing) {
+        setCategory(categoryMetaOf(editing).id);
+        setClaimDate(editing.claimDate);
+        setDescription(editing.title);
+        setAmountStr(String(editing.amount));
+        setKmStr(editing.mileageKm != null ? String(editing.mileageKm) : '');
+        setRateStr(editing.mileageRate != null ? String(editing.mileageRate) : String(policy.mileageRatePerKm));
+        setReceiptName(editing.receiptName);
+      } else {
+        setCategory('travel');
+        setClaimDate(todayIso());
+        setDescription('');
+        setAmountStr('');
+        setKmStr('');
+        setRateStr(String(policy.mileageRatePerKm));
+        setReceiptName(undefined);
+      }
     }
-  }, [open, editing, policy.mileageRatePerKm]);
+  }
 
   const isMileage = category === 'mileage';
   const meta = CATEGORIES.find((c) => c.id === category)!;
@@ -87,21 +93,17 @@ export default function ClaimFormDialog({ open, onOpenChange, employee, claims, 
     : 0;
   const amount = isMileage ? mileageAmount : round2(Number.parseFloat(amountStr) || 0);
 
-  const warnings = useMemo(
-    () =>
-      policyWarnings(
-        {
-          employeeId: employee.id,
-          category: meta.claimCategory,
-          amount,
-          claimDate,
-          mileageRate: isMileage && Number.isFinite(rate) ? round2(rate) : undefined,
-        },
-        claims,
-        policy,
-        editing?.id,
-      ),
-    [employee.id, meta.claimCategory, amount, claimDate, isMileage, rate, claims, policy, editing?.id],
+  const warnings = policyWarnings(
+    {
+      employeeId: employee.id,
+      category: meta.claimCategory,
+      amount,
+      claimDate,
+      mileageRate: isMileage && Number.isFinite(rate) ? round2(rate) : undefined,
+    },
+    claims,
+    policy,
+    editing?.id,
   );
 
   const errors: string[] = [];
@@ -122,6 +124,7 @@ export default function ClaimFormDialog({ open, onOpenChange, employee, claims, 
   function persist(status: 'draft' | 'submitted') {
     if (!valid) {
       setTouched(true);
+      toast.error('Please fix the highlighted fields before saving.');
       return;
     }
     const base = {
@@ -151,6 +154,11 @@ export default function ClaimFormDialog({ open, onOpenChange, employee, claims, 
         entityId: editing.id,
         detail: `${meta.label} — ${fmtRM(amount)} (${base.title.slice(0, 60)})`,
       });
+      toast.success(
+        status === 'submitted'
+          ? `Claim submitted for approval — ${meta.label} ${fmtRM(amount)}`
+          : `Draft claim updated — ${meta.label} ${fmtRM(amount)}`,
+      );
     } else {
       const saved = add({
         ...base,
@@ -165,6 +173,11 @@ export default function ClaimFormDialog({ open, onOpenChange, employee, claims, 
         entityId: saved.id,
         detail: `${meta.label} — ${fmtRM(amount)} (${base.title.slice(0, 60)})`,
       });
+      toast.success(
+        status === 'submitted'
+          ? `Claim submitted for approval — ${meta.label} ${fmtRM(amount)}`
+          : `Draft saved — ${meta.label} ${fmtRM(amount)}`,
+      );
     }
     onOpenChange(false);
   }

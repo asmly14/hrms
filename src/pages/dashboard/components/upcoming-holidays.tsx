@@ -24,13 +24,16 @@ export function UpcomingHolidays() {
   const hq = settingsItems[0]?.hqState ?? 'KUL';
 
   const upcoming = useMemo(() => {
+    // getHolidays reads the overrides collection straight from storage — the
+    // React-side subscription above just retriggers this memo when admin
+    // holiday overrides change.
+    void overrides;
     const year = new Date().getFullYear();
     const today = todayISO();
     return [...getHolidays(year, hq), ...getHolidays(year + 1, hq)]
       .filter((h) => h.date >= today)
       .sort((a, b) => a.date.localeCompare(b.date))
       .slice(0, 5);
-    // overrides retrigger the memo when admin holiday overrides change
   }, [hq, overrides]);
 
   return (

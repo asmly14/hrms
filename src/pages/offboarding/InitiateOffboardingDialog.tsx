@@ -5,6 +5,7 @@
  */
 import { useMemo, useState } from 'react';
 import { Calculator } from 'lucide-react';
+import { toast } from 'sonner';
 import type { Claim, Employee, LeaveBalance } from '@/lib/types';
 import { useCollection } from '@/lib/db';
 import {
@@ -115,6 +116,9 @@ export default function InitiateOffboardingDialog({
       `${OFFBOARDING_REASON_LABELS[reason]} initiated for ${employee.name}; notice ${noticeDate}, LWD ${payload.lastWorkingDay}`,
       actorName,
     );
+    toast.success(`Offboarding initiated for ${employee.name}`, {
+      description: `${OFFBOARDING_REASON_LABELS[reason]} · last working day ${fmtDate(payload.lastWorkingDay)} · CP22A due ${fmtDate(payload.cp22aDueDate)}`,
+    });
     reset();
     onOpenChange(false);
   }

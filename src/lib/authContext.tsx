@@ -22,7 +22,7 @@
  * are trivially testable and safe to call inside useMemo.
  */
 import {
-  createContext, useCallback, useContext, useEffect, useMemo, useState,
+  useCallback, useMemo, useState,
   type ReactNode,
 } from 'react';
 import {
@@ -30,66 +30,20 @@ import {
   type LoginResult, type PublicUser,
 } from './auth';
 import { useCollection } from './db';
+import { AuthContext, type AuthContextValue } from './useAuth';
 import type { Employee } from './types';
 
-export interface AuthContextValue {
-  /** The logged-in user's public profile (null when logged out). */
-  user: PublicUser | null;
-  /** Convenience: user?.role ?? null. */
-  role: PublicUser['role'] | null;
-  /** Convenience: user?.employeeId ?? null — the linked Employee record id. */
-  employeeId: string | null;
-  /** Tenant of the logged-in account (null only for SuperAdmin). */
-  companyId: string | null;
-  /** True for the cross-company system SuperAdmin. */
-  isSuperAdmin: boolean;
-  /** True while a valid session exists. */
-  isAuthenticated: boolean;
-  /**
-   * Attempt a login; updates context state on success.
-   * Returns the same LoginResult as lib/auth so pages can show error states.
-   */
-  login: (username: string, password: string) => LoginResult;
-  /** End the session and clear context state. */
-  logout: () => void;
-  /**
-   * Can the current user view records belonging to employee `id`?
-   * Admin/HR → always true. Manager → true when that employee is in the
-   * manager's department. Employee → true only for their own id.
-   */
-  canViewEmployee: (id: string) => boolean;
-  /**
-   * Filter an Employee list to the visible scope.
-   * Admin/HR → list unchanged. Manager → own department only.
-   * Employee → only their own record.
-   */
-  scopeEmployees: (list: Employee[]) => Employee[];
-  /**
-   * Filter ANY collection that carries an employeeId to the visible scope.
-   * This is the primary helper module pages should use:
-   *
-   *   scopeByEmployee(claims, (c) => c.employeeId)
-   *
-   * Admin/HR → list unchanged. Manager → rows whose employee is in the
-   * manager's department. Employee → only rows for their own employeeId.
-   * Accounts without a linked employee (standalone admin/hr) are unaffected
-   * since they are Admin/HR-scoped anyway; a Manager/Employee account with
-   * no employeeId sees nothing (fail closed).
-   */
-  scopeByEmployee: <T>(list: T[], getEmpId: (item: T) => string) => T[];
-}
+export type { AuthContextValue } from './useAuth';
 
-const AuthContext = createContext<AuthContextValue | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<PublicUser | null>(() => currentUser());
-
-  // Make sure the account directory exists on boot (idempotent, merge-based).
-  useEffect(() => {
+  // Lazy initializer: seed the account directory (idempotent, merge-based)
+  // BEFORE the first session resolve, so no boot effect is needed.
+  const [user, setUser] = useState<PublicUser | null>(() => {
     seedUsers();
     // Re-resolve in case the directory was (re)built after the session.
-    setUser(currentUser());
-  }, []);
+    return currentUser();
+  });
 
   const { items: employees } = useCollection<Employee>('employees');
 
@@ -176,11 +130,4 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
-}
-
-/** Access the auth context. Must be used inside <AuthProvider>. */
-export function useAuth(): AuthContextValue {
-  const ctx = useContext(AuthContext);
-  if (!ctx) throw new Error('useAuth must be used within <AuthProvider>');
-  return ctx;
 }

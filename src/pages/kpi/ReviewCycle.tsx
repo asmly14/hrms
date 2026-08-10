@@ -18,6 +18,7 @@ import {
   AlertTriangle, ArrowLeft, CheckCircle2, ChevronRight, ClipboardCheck, Lock,
   MessageSquare, Send, User,
 } from 'lucide-react';
+import { toast } from 'sonner';
 import { logAudit, useCollection } from '@/lib/db';
 import { avatarTone, cn, fmtDate, initialsOf } from '@/lib/utils';
 import type { Department, Employee } from '@/lib/types';
@@ -212,6 +213,9 @@ export default function ReviewCycle() {
       entity: 'reviews', entityId: scoring.id,
       detail: `${empOf(scoring.employeeId)?.name ?? scoring.employeeId} · ${period} · self-review ${selfScores.length}/${scoringKpis.length}`,
     });
+    toast.success('Self-review saved', {
+      description: `${empOf(scoring.employeeId)?.name ?? scoring.employeeId} · ${period} · ${selfScores.length}/${scoringKpis.length} KPIs scored`,
+    });
     setScoring(null);
   }
 
@@ -246,6 +250,15 @@ export default function ReviewCycle() {
       entityId: scoring.id,
       detail: `${empOf(scoring.employeeId)?.name ?? scoring.employeeId} · ${period} · ${(overall / 20).toFixed(1)}/5`,
     });
+    if (isSubmit) {
+      toast.success(`Review submitted for ${empOf(scoring.employeeId)?.name ?? scoring.employeeId}`, {
+        description: `${period} · overall ${(overall / 20).toFixed(1)}/5 — awaiting employee acknowledgement`,
+      });
+    } else {
+      toast.success('Review draft saved', {
+        description: `${empOf(scoring.employeeId)?.name ?? scoring.employeeId} · ${period} · ${scored.length}/${scoringKpis.length} KPIs scored`,
+      });
+    }
     setScoring(null);
   }
 
@@ -255,6 +268,9 @@ export default function ReviewCycle() {
     logAudit({
       actorName: auth?.user?.username ?? 'KPI module', action: 'kpi.reviewAck', entity: 'reviews', entityId: r.id,
       detail: `${empOf(r.employeeId)?.name ?? r.employeeId} · ${period}`,
+    });
+    toast.success('Review acknowledged', {
+      description: `${empOf(r.employeeId)?.name ?? r.employeeId} · ${period} · overall ${((r.overallScore ?? 0) / 20).toFixed(1)}/5`,
     });
   }
 

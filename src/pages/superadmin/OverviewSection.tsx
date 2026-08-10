@@ -12,7 +12,7 @@ import {
 import {
   Bar, BarChart, CartesianGrid, Cell, Pie, PieChart, XAxis, YAxis,
 } from 'recharts';
-import { useTenant } from '@/lib/tenantContext';
+import { useTenant } from '@/lib/useTenant';
 import { fmtRM } from '@/lib/utils';
 import {
   Card, CardContent, CardDescription, CardHeader, CardTitle,

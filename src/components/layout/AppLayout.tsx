@@ -1,25 +1,29 @@
 /**
- * App shell: left sidebar (desktop) + bottom nav (mobile), topbar with
- * company stub, global search, notification bell (static demo), dark-mode
- * toggle (class strategy) and the role switcher that gates nav items.
+ * App shell: left sidebar (desktop) + bottom nav with "More" sheet (mobile),
+ * topbar with company stub, live global search, live notification bell,
+ * dark-mode toggle (class strategy) and the role switcher that gates nav items.
+ *
+ * The nav model (NAV_ITEMS / visibleNavItems) lives in ./nav and the role
+ * resolver in ./useEffectiveRole — import those directly (this module exports
+ * only components so fast refresh keeps working).
  */
 import { useEffect, useState, type ReactNode } from 'react';
-import { NavLink, Outlet, useNavigate } from 'react-router-dom';
+import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import {
-  Bell, Building2, Calendar, CalendarDays, ClipboardList, FileText, Gauge,
-  LayoutDashboard, LogOut, Moon, Network, Receipt, ScrollText, Search, Settings,
-  ShieldCheck, Sun, TrendingUp, UserRound, UserRoundCheck, UserRoundMinus,
-  Users, Wallet, Workflow,
+  Building2, LogOut, Menu, Moon, ShieldCheck, Sun, UserRound,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { useRole, type AppRole } from '@/lib/roleContext';
-import { useAuth } from '@/lib/authContext';
-import { useTenant } from '@/lib/tenantContext';
+import { useRole, type AppRole } from '@/lib/useRole';
+import { useAuth } from '@/lib/useAuth';
+import { useTenant } from '@/lib/useTenant';
 import { useCollection } from '@/lib/db';
-import type { ModuleKey, Settings as CompanySettings } from '@/lib/types';
-import { isModuleEnabled } from '@/pages/company/modules';
+import type { Settings as CompanySettings } from '@/lib/types';
 import { useCompanyBranding } from '@/pages/company/branding';
-import { Input } from '@/components/ui/input';
+import { MOBILE_PATHS, visibleNavItems } from './nav';
+import { useEffectiveRole } from './useEffectiveRole';
+import { useCompanyLabel } from './useCompanyLabel';
+import NotificationBell from './NotificationBell';
+import GlobalSearch from './GlobalSearch';
 import { Button } from '@/components/ui/button';
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
@@ -28,85 +32,11 @@ import {
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
+import {
+  Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger,
+} from '@/components/ui/sheet';
 
-export interface NavItem {
-  path: string;
-  title: string;
-  icon: typeof LayoutDashboard;
-  roles: AppRole[];
-  /** Feature-gated by the active company's module toggles when set. */
-  module?: ModuleKey;
-  /** Visible ONLY to the system SuperAdmin session (auth-aware filter). */
-  superAdminOnly?: boolean;
-}
-
-/** Single source of nav truth — module routes map onto these paths.
- *  Role gating: Admin/HR see everything; Manager gets dashboard, attendance,
- *  leave, claims, kpi, reports; Employee gets dashboard, attendance, leave,
- *  claims. (Payslips live under /payroll which is Admin/HR only.)
- *  Module gating: items tagged `module` disappear when the active company
- *  has that module disabled (Company Setup → Modules). */
-export const NAV_ITEMS: NavItem[] = [
-  { path: '/', title: 'Dashboard', icon: LayoutDashboard, roles: ['Admin', 'HR', 'Manager', 'Employee'] },
-  { path: '/employees', title: 'Employees', icon: Users, roles: ['Admin', 'HR'] },
-  { path: '/contracts', title: 'Contracts', icon: ScrollText, roles: ['Admin', 'HR'] },
-  { path: '/org', title: 'Organization', icon: Network, roles: ['Admin', 'HR'] },
-  { path: '/org/chart', title: 'Org Chart', icon: Workflow, roles: ['Admin', 'HR'] },
-  { path: '/attendance', title: 'Attendance', icon: Calendar, roles: ['Admin', 'HR', 'Manager', 'Employee'], module: 'attendance' },
-  { path: '/leave', title: 'Leave', icon: ClipboardList, roles: ['Admin', 'HR', 'Manager', 'Employee'], module: 'leave' },
-  { path: '/holidays', title: 'Holidays', icon: CalendarDays, roles: ['Admin', 'HR'] },
-  { path: '/claims', title: 'Claims', icon: Receipt, roles: ['Admin', 'HR', 'Manager', 'Employee'], module: 'claims' },
-  { path: '/payroll', title: 'Payroll', icon: Wallet, roles: ['Admin', 'HR'], module: 'payroll' },
-  { path: '/kpi', title: 'KPI', icon: Gauge, roles: ['Admin', 'HR', 'Manager'], module: 'kpi' },
-  { path: '/insights/salary', title: 'Salary Insights', icon: TrendingUp, roles: ['Admin', 'HR'], module: 'insights' },
-  { path: '/reports', title: 'Reports', icon: FileText, roles: ['Admin', 'HR', 'Manager'], module: 'reports' },
-  { path: '/onboarding', title: 'Onboarding', icon: UserRoundCheck, roles: ['Admin', 'HR'], module: 'onboarding' },
-  { path: '/offboarding', title: 'Offboarding', icon: UserRoundMinus, roles: ['Admin', 'HR'], module: 'offboarding' },
-  { path: '/company', title: 'Company Setup', icon: Building2, roles: ['Admin', 'HR'] },
-  { path: '/settings', title: 'Settings', icon: Settings, roles: ['Admin'] },
-  { path: '/superadmin', title: 'Super Admin', icon: ShieldCheck, roles: ['Admin'], superAdminOnly: true },
-];
-
-const MOBILE_PATHS = ['/', '/attendance', '/leave', '/claims', '/kpi'];
 const THEME_KEY = 'myhrms:theme';
-const DEV_ROLE_OVERRIDE_KEY = 'myhrms:devRoleOverride';
-
-/**
- * Nav visibility = role filter, then the auth-aware SuperAdmin filter, then
- * the per-company module gate. isModuleEnabled() is non-reactive, so callers
- * must render under a tenant subscription (AppLayout mounts one) to re-run
- * this filter immediately after a tenant switch.
- */
-export function visibleNavItems(role: AppRole, isSuperAdmin: boolean): NavItem[] {
-  return NAV_ITEMS.filter((i) => {
-    if (i.superAdminOnly) return isSuperAdmin;
-    if (!i.roles.includes(role)) return false;
-    if (i.module && !isModuleEnabled(i.module)) return false;
-    return true;
-  });
-}
-
-/**
- * Effective role = dev-only override (localStorage 'myhrms:devRoleOverride' = '1')
- * OR the authenticated session role. Fails closed to 'Employee' when unknown.
- * See docs/auth-integration.md §3.
- */
-export function useEffectiveRole(): { role: AppRole; devOverrideEnabled: boolean } {
-  const { role: authRole } = useAuth();
-  const { role: devRole } = useRole();
-  let devEnabled = false;
-  try {
-    devEnabled =
-      import.meta.env.DEV && localStorage.getItem(DEV_ROLE_OVERRIDE_KEY) === '1';
-  } catch {
-    devEnabled = false;
-  }
-  if (devEnabled) return { role: devRole, devOverrideEnabled: true };
-  // SuperAdmin maps onto the Admin UI surface (full nav) until the dedicated
-  // console arrives; AuthRole 'SuperAdmin' is not part of AppRole.
-  const role: AppRole = authRole === 'SuperAdmin' ? 'Admin' : authRole ?? 'Employee';
-  return { role, devOverrideEnabled: false };
-}
 
 function useDarkMode() {
   const [dark, setDark] = useState<boolean>(() => {
@@ -134,14 +64,10 @@ function TopBar() {
   const { activeCompany, isSystemView } = useTenant();
   const { dark, toggle } = useDarkMode();
   const navigate = useNavigate();
+  const companyLabel = useCompanyLabel();
+  // Extra detail line for the company dropdown (reg no / system-view note).
   const { items: settingsItems } = useCollection<CompanySettings>('settings');
   const company = settingsItems[0];
-  // Tenant-aware label: the active company record wins; in the SuperAdmin
-  // system view there is no tenant, so say so instead of showing the
-  // co-asm fallback data the db layer resolves.
-  const companyLabel = isSystemView && isSuperAdmin
-    ? 'System view'
-    : activeCompany?.name ?? company?.companyName ?? 'MY HRMS';
 
   const signOut = () => {
     logout();
@@ -170,41 +96,9 @@ function TopBar() {
         </DropdownMenuContent>
       </DropdownMenu>
 
-      <div className="relative ml-auto hidden w-full max-w-xs md:block">
-        <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-        <Input
-          placeholder="Search employees, pages…"
-          className="pl-8"
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') navigate('/employees');
-          }}
-        />
-      </div>
+      <GlobalSearch />
 
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button variant="ghost" size="icon" className="relative" aria-label="Notifications">
-            <Bell className="h-4 w-4" />
-            <span className="absolute right-1.5 top-1.5 h-2 w-2 rounded-full bg-amber-500" />
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="w-80">
-          <DropdownMenuLabel>Notifications</DropdownMenuLabel>
-          <DropdownMenuSeparator />
-          <DropdownMenuItem className="flex flex-col items-start gap-1">
-            <span className="text-sm font-medium">Payroll reminder</span>
-            <span className="text-xs text-muted-foreground">EPF/SOCSO/EIS/PCB submissions due on the 15th.</span>
-          </DropdownMenuItem>
-          <DropdownMenuItem className="flex flex-col items-start gap-1">
-            <span className="text-sm font-medium">3 leave requests pending</span>
-            <span className="text-xs text-muted-foreground">Review under Leave → Approvals.</span>
-          </DropdownMenuItem>
-          <DropdownMenuItem className="flex flex-col items-start gap-1">
-            <span className="text-sm font-medium">Holiday data</span>
-            <span className="text-xs text-muted-foreground">Islamic holiday dates are tentative pending official gazette.</span>
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
+      <NotificationBell />
 
       <Button variant="ghost" size="icon" onClick={toggle} aria-label="Toggle dark mode">
         {dark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
@@ -284,15 +178,29 @@ function SideNav() {
   );
 }
 
+/**
+ * Mobile bottom nav: the first 4 MOBILE_PATHS items stay as one-tap tabs; the
+ * 5th slot is "More", opening a Sheet with the FULL role-filtered nav list
+ * (visibleNavItems) so every route is reachable on a phone. The sheet shows
+ * the company label, highlights the active route and closes on navigate; the
+ * More tab itself lights up when the current route lives only inside it.
+ */
 function BottomNav() {
   const { role } = useEffectiveRole();
   const { isSuperAdmin } = useAuth();
-  const items = visibleNavItems(role, isSuperAdmin)
-    .filter((i) => MOBILE_PATHS.includes(i.path) || i.path === '/')
-    .slice(0, 5);
+  const companyLabel = useCompanyLabel();
+  const [moreOpen, setMoreOpen] = useState(false);
+  const { pathname } = useLocation();
+  const all = visibleNavItems(role, isSuperAdmin);
+  const primary = all.filter((i) => MOBILE_PATHS.includes(i.path)).slice(0, 4);
+
+  const pathActive = (path: string) =>
+    path === '/' ? pathname === '/' : pathname === path || pathname.startsWith(`${path}/`);
+  const moreActive = !primary.some((i) => pathActive(i.path)) && all.some((i) => pathActive(i.path));
+
   return (
     <nav className="fixed bottom-0 left-0 right-0 z-30 flex border-t bg-card md:hidden">
-      {items.map((item) => (
+      {primary.map((item) => (
         <NavLink
           key={item.path}
           to={item.path}
@@ -308,6 +216,53 @@ function BottomNav() {
           {item.title}
         </NavLink>
       ))}
+
+      <Sheet open={moreOpen} onOpenChange={setMoreOpen}>
+        <SheetTrigger asChild>
+          <button
+            className={cn(
+              'flex flex-1 flex-col items-center gap-1 py-2 text-[11px] font-medium',
+              moreActive ? 'text-primary' : 'text-muted-foreground',
+            )}
+            aria-label="More navigation"
+          >
+            <Menu className="h-5 w-5" />
+            More
+          </button>
+        </SheetTrigger>
+        <SheetContent side="bottom" className="max-h-[75vh] overflow-y-auto">
+          <SheetHeader>
+            <SheetTitle className="flex items-center gap-2">
+              <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-primary text-primary-foreground">
+                <Building2 className="h-4 w-4" />
+              </span>
+              {companyLabel}
+            </SheetTitle>
+            <SheetDescription>All pages available to your role.</SheetDescription>
+          </SheetHeader>
+          <nav className="grid gap-1 pb-6">
+            {all.map((item) => (
+              <NavLink
+                key={item.path}
+                to={item.path}
+                end={item.path === '/'}
+                onClick={() => setMoreOpen(false)}
+                className={({ isActive }) =>
+                  cn(
+                    'flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors',
+                    isActive
+                      ? 'bg-primary/10 text-primary'
+                      : 'text-foreground hover:bg-accent hover:text-accent-foreground',
+                  )
+                }
+              >
+                <item.icon className="h-4 w-4 shrink-0" />
+                {item.title}
+              </NavLink>
+            ))}
+          </nav>
+        </SheetContent>
+      </Sheet>
     </nav>
   );
 }

@@ -5,6 +5,7 @@
  */
 import { useMemo, useState } from 'react';
 import { FileText, Printer } from 'lucide-react';
+import { toast } from 'sonner';
 import { useCollection } from '@/lib/db';
 import { fmtRM, round2 } from '@/lib/utils';
 import type {
@@ -141,7 +142,16 @@ export default function EAFormDialog({
             </SelectContent>
           </Select>
           {emp && slips.length > 0 && (
-            <Button variant="outline" className="ml-auto" onClick={() => window.print()}>
+            <Button
+              variant="outline"
+              className="ml-auto"
+              onClick={() => {
+                toast.info('Opening print dialog…', {
+                  description: `EA form ${effYear} — ${emp.name}. Choose "Save as PDF" to keep a copy.`,
+                });
+                window.print();
+              }}
+            >
               <Printer className="h-4 w-4" /> Print
             </Button>
           )}

@@ -5,7 +5,7 @@
  * answer "what does a RM500 increment really cost?" in one glance.
  * Simulation only — nothing is persisted.
  */
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { AlertTriangle, ArrowRight, Calculator, PiggyBank, Wallet } from 'lucide-react';
 import { useCollection } from '@/lib/db';
 import * as payrollEngine from '@/lib/payrollEngine';
@@ -138,16 +138,23 @@ export default function IncrementSimulator() {
   const emp = active.find((e) => e.id === empId) ?? active[0];
   const [salaryInput, setSalaryInput] = useState('');
 
-  useEffect(() => {
+  // Reset the proposal whenever the selected employee changes — render-phase
+  // adjust keyed on the employee id, no effect.
+  const [prevEmpId, setPrevEmpId] = useState(emp?.id);
+  if (prevEmpId !== emp?.id) {
+    setPrevEmpId(emp?.id);
     setSalaryInput(emp ? String(emp.baseSalary) : '');
-    // Reset the proposal whenever the selected employee changes.
-  }, [emp?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  }
 
   const proposed = Number(salaryInput);
   const valid = emp != null && salaryInput.trim() !== '' && Number.isFinite(proposed) && proposed > 0;
 
   const sim = useMemo<{ now: SimResult; next: SimResult } | null>(() => {
     if (!emp || !valid) return null;
+    // ytdFor/engineYtdForPcb read payslip history straight from storage — the
+    // React-side subscription below simply retriggers the sim when new
+    // payslips land (e.g. right after a payroll run).
+    void payslips;
     const age = ageFromDob(emp.dateOfBirth);
     const citizen = !emp.isForeignWorker;
     const allowances = round2((emp.fixedAllowances ?? []).reduce((s, a) => s + a.amount, 0));

@@ -9,8 +9,9 @@ import { useNavigate } from 'react-router-dom';
 import {
   Ban, Building2, LogIn, Pencil, Plus, RotateCcw, Search,
 } from 'lucide-react';
-import { useAuth } from '@/lib/authContext';
-import { useTenant } from '@/lib/tenantContext';
+import { useAuth } from '@/lib/useAuth';
+import { toast } from 'sonner';
+import { useTenant } from '@/lib/useTenant';
 import { logAudit, upsertCompany } from '@/lib/db';
 import { states } from '@/lib/holidays';
 import { fmtDate } from '@/lib/utils';
@@ -93,6 +94,9 @@ function EditCompanyDialog(props: {
       },
       next.id,
     );
+    toast.success(`Company “${next.name}” saved`, {
+      description: changes.length > 0 ? `Updated: ${changes.join(', ')}` : 'No field changes',
+    });
     onSaved();
   };
 
@@ -238,6 +242,9 @@ export default function CompaniesSection() {
 
   const enterCompany = (c: Company) => {
     setActiveCompany(c.id);
+    toast.success(`Entered ${c.name}`, {
+      description: `Now working inside tenant ${c.code} — all pages are scoped to it.`,
+    });
     navigate('/');
   };
 
@@ -257,6 +264,15 @@ export default function CompaniesSection() {
       next.id,
     );
     refreshCompanies();
+    if (action === 'suspend') {
+      toast.success(`${next.name} suspended`, {
+        description: 'Data stays intact; the tenant is flagged across the console.',
+      });
+    } else {
+      toast.success(`${next.name} reactivated`, {
+        description: 'The tenant is active again.',
+      });
+    }
     setConfirm(null);
   };
 

@@ -17,8 +17,9 @@ import { Link } from 'react-router-dom';
 import {
   Building2, CircleAlert, FileText, GitBranch, Pencil, Plus, Search, Trash2, Users,
 } from 'lucide-react';
+import { toast } from 'sonner';
 import { logAudit, useCollection } from '@/lib/db';
-import { useTenant } from '@/lib/tenantContext';
+import { useTenant } from '@/lib/useTenant';
 import { useAuthScope } from '@/pages/leave/useAuthScope';
 import {
   activeEmployees,
@@ -125,10 +126,12 @@ export default function OrgPage() {
       });
       deptProfiles.upsert(editing.id, { costCenter: values.costCenter || undefined, color: values.color });
       logAudit({ actorName: auth.actor, action: 'org.department.update', entity: 'departments', entityId: editing.id, detail: values.name });
+      toast.success(`Department updated: ${values.name}`);
     } else {
       const created = departments.add({ name: values.name, code: values.code, state: values.state, headId: values.headId });
       deptProfiles.upsert(created.id, { costCenter: values.costCenter || undefined, color: values.color });
       logAudit({ actorName: auth.actor, action: 'org.department.create', entity: 'departments', entityId: created.id, detail: values.name });
+      toast.success(`Department created: ${values.name}`);
     }
   };
 
@@ -150,6 +153,7 @@ export default function OrgPage() {
         ? `${dept.name} — ${staff.length} employee(s) + ${deptPositions.length} position(s) reassigned`
         : dept.name,
     });
+    toast.success(`Department deleted: ${dept.name}`);
     setDeptDelete(null);
     setReassignTarget('');
   };
@@ -179,6 +183,7 @@ export default function OrgPage() {
       });
       profiles.upsert(editing.id, profilePatch);
       logAudit({ actorName: auth.actor, action: 'org.position.update', entity: 'positions', entityId: editing.id, detail: values.title });
+      toast.success(`Position updated: ${values.title}`);
     } else {
       const created = positions.add({
         title: values.title, departmentId: values.departmentId, level: values.level,
@@ -186,6 +191,7 @@ export default function OrgPage() {
       });
       profiles.upsert(created.id, profilePatch);
       logAudit({ actorName: auth.actor, action: 'org.position.create', entity: 'positions', entityId: created.id, detail: values.title });
+      toast.success(`Position created: ${values.title}`);
     }
   };
 
@@ -202,6 +208,7 @@ export default function OrgPage() {
       actorName: auth.actor, action: 'org.position.delete', entity: 'positions', entityId: pos.id,
       detail: deleteChildren.length > 0 ? `${pos.title} — ${deleteChildren.length} report(s) re-parented` : pos.title,
     });
+    toast.success(`Position deleted: ${pos.title}`);
     setPosDelete(null);
   };
 

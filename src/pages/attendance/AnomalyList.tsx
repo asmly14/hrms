@@ -8,6 +8,7 @@
  */
 import { useMemo, useState } from 'react';
 import { AlertTriangle, CalendarClock, MoonStar, ShieldAlert, Wrench } from 'lucide-react';
+import { toast } from 'sonner';
 import { logAudit, useCollection } from '@/lib/db';
 import type { Employee } from '@/lib/types';
 import { fmtDate, monthKey } from '@/lib/utils';
@@ -117,6 +118,7 @@ export default function AnomalyList() {
     const shift = emp ? shiftForEmployee(emp, shifts, rotations, a.date) : undefined;
     if (!shift) {
       setFixedMsg(`Cannot backfill ${empName(a.empId)} on ${fmtDate(a.date)} — no resolvable shift end time.`);
+      toast.error(`Cannot backfill ${empName(a.empId)} on ${fmtDate(a.date)} — no resolvable shift end time.`);
       return;
     }
     update(a.record.id, {
@@ -131,6 +133,7 @@ export default function AnomalyList() {
       detail: `Backfilled clock-out to ${shift.endTime} for ${empName(a.empId)} on ${a.date}`,
     });
     setFixedMsg(`Backfilled clock-out for ${empName(a.empId)} on ${fmtDate(a.date)}.`);
+    toast.success(`Backfilled clock-out for ${empName(a.empId)} on ${fmtDate(a.date)}`);
   };
 
   const counts = {

@@ -1,7 +1,8 @@
 import { Link } from 'react-router-dom';
 import { BadgeCheck, Hourglass } from 'lucide-react';
+import { toast } from 'sonner';
 import { useCollection, logAudit } from '@/lib/db';
-import { useAuth } from '@/lib/authContext';
+import { useAuth } from '@/lib/useAuth';
 import { fmtDate } from '@/lib/utils';
 import type { Department, Employee } from '@/lib/types';
 import { Card, CardContent } from '@/components/ui/card';
@@ -43,6 +44,7 @@ export function ProbationStrip() {
       entityId: emp.id,
       detail: `${emp.name} confirmed in role after probation`,
     });
+    toast.success(`${emp.name} confirmed in role after probation`);
   };
 
   return (

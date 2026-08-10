@@ -12,6 +12,11 @@
  *  - No OT-request collection → an OT request is an attendance record with
  *    `otRequested: true, otApproved: false`; approval flips `otApproved`,
  *    which is the exact field payrollEngine pays on.
+ *  - Rotation plans are PER-TENANT: they persist under
+ *    `myhrms:t:<companyId>:attendance:rotations` (same key convention as
+ *    lib/orgChart.ts, resolved via lib/db.ts tenant helpers). The legacy
+ *    pre-multi-tenant global key migrates into the default company namespace
+ *    on first access — see the store block below.
  */
 
 import { useEffect, useState, useSyncExternalStore } from 'react';
@@ -19,6 +24,7 @@ import type {
   AttendanceRecord, Employee, OTDayType, Settings, Shift,
 } from '@/lib/types';
 import { isHoliday, isWeekend, stateInfo } from '@/lib/holidays';
+import { DEFAULT_COMPANY_ID, getActiveTenantId, subscribeTenant } from '@/lib/db';
 
 // ── Extended (module-local) shapes ───────────────────────────────────────────
 
@@ -216,30 +222,87 @@ export interface RotationPlan {
   employeeIds: string[];
 }
 
-const ROT_KEY = 'myhrms:attendance:rotations';
+// ── Rotation plans — per-tenant store (mirrors lib/orgChart.ts convention) ──
+//
+// Rotation plans carry tenant-local ids (employeeIds / shiftIds), so they must
+// never be shared: they persist under `myhrms:t:<companyId>:attendance:rotations`,
+// the same physical naming convention lib/db.ts and lib/orgChart.ts use.
+// The pre-multi-tenant build wrote ONE global key (`myhrms:attendance:rotations`)
+// — a cross-tenant leak (audit L1). That data predates tenants (only co-asm
+// existed), so on first access it migrates into the DEFAULT company namespace,
+// exactly like db.ts migrateLegacyData(); the global key is always removed.
+
+const TENANT_PREFIX = 'myhrms:t:';
+const ROT_COLLECTION = 'attendance:rotations';
+/** Legacy pre-multi-tenant global key (audit L1) — migrated, then removed. */
+const LEGACY_ROT_KEY = 'myhrms:attendance:rotations';
 const rotListeners = new Set<() => void>();
 
-export function getRotations(): RotationPlan[] {
+function rotKey(tenantId?: string): string {
+  return `${TENANT_PREFIX}${tenantId ?? getActiveTenantId() ?? DEFAULT_COMPANY_ID}:${ROT_COLLECTION}`;
+}
+
+/**
+ * One-time, idempotent migration: legacy global plans move into the default
+ * company (co-asm) namespace — tenant data wins when both exist, and the
+ * global key is removed either way. Returns true when a key was migrated.
+ */
+function migrateLegacyRotations(): boolean {
   try {
-    const raw = localStorage.getItem(ROT_KEY);
+    const legacy = localStorage.getItem(LEGACY_ROT_KEY);
+    if (legacy === null) return false;
+    const target = rotKey(DEFAULT_COMPANY_ID);
+    if (localStorage.getItem(target) === null) {
+      localStorage.setItem(target, legacy);
+    }
+    localStorage.removeItem(LEGACY_ROT_KEY);
+    return true;
+  } catch {
+    return false; // storage unavailable — retry on next access
+  }
+}
+
+/** All rotation plans for the active (or given) tenant. Non-reactive. */
+export function getRotations(tenantId?: string): RotationPlan[] {
+  migrateLegacyRotations();
+  try {
+    const raw = localStorage.getItem(rotKey(tenantId));
     return raw ? (JSON.parse(raw) as RotationPlan[]) : [];
   } catch {
     return [];
   }
 }
 
-export function saveRotations(plans: RotationPlan[]): void {
-  localStorage.setItem(ROT_KEY, JSON.stringify(plans));
+/** Overwrite the rotation plans of the active (or given) tenant. */
+export function saveRotations(plans: RotationPlan[], tenantId?: string): void {
+  migrateLegacyRotations();
+  localStorage.setItem(rotKey(tenantId), JSON.stringify(plans));
   rotListeners.forEach((fn) => fn());
 }
 
+/**
+ * Reactive rotation plans for the ACTIVE tenant — re-renders on own writes
+ * AND on active-tenant switches (via db.ts subscribeTenant), matching
+ * useCollection semantics.
+ */
 export function useRotations(): RotationPlan[] {
+  // Re-read on tenant switch so the snapshot below re-reads the new namespace.
+  useSyncExternalStore(subscribeTenant, () => getActiveTenantId() ?? '__system__');
   const raw = useSyncExternalStore(
     (fn) => {
+      // Mount-time legacy migration (subscribe runs in an effect); notify so
+      // already-mounted consumers re-read the migrated namespace.
+      if (migrateLegacyRotations()) rotListeners.forEach((l) => l());
       rotListeners.add(fn);
       return () => rotListeners.delete(fn);
     },
-    () => localStorage.getItem(ROT_KEY) ?? '',
+    () => {
+      try {
+        return localStorage.getItem(rotKey()) ?? '';
+      } catch {
+        return '';
+      }
+    },
   );
   try {
     return raw ? (JSON.parse(raw) as RotationPlan[]) : [];

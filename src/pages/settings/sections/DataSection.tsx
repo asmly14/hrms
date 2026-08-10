@@ -1,11 +1,13 @@
 /**
- * Settings → Data management: full JSON export of every collection, an
- * import placeholder, and the guarded "Reset & reseed demo data" action.
+ * Settings → Data management: full JSON export of every collection, a real
+ * JSON import (validate → preview → merge/replace into the ACTIVE tenant),
+ * and the guarded "Reset & reseed demo data" action.
  */
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { DatabaseBackup, Download, HardDrive, RefreshCw, TriangleAlert, Upload } from 'lucide-react';
+import { toast } from 'sonner';
 import {
-  COLLECTIONS, getActiveTenantId, getCollection, logAudit, setCollection,
+  COLLECTIONS, getActiveCompany, getActiveTenantId, getCollection, logAudit, setCollection,
   tenantSeedFlag, useCollection, type CollectionName,
 } from '@/lib/db';
 import {
@@ -13,6 +15,11 @@ import {
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { Button } from '@/components/ui/button';
+import {
+  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
+} from '@/components/ui/dialog';
+import { Label } from '@/components/ui/label';
+import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { DEMO_ACTOR, SectionCard } from '../shared';
 
 function storageBytes(): number {
@@ -29,12 +36,69 @@ function fmtBytes(n: number): string {
   return n < 1024 ? `${n} B` : `${(n / 1024).toFixed(1)} KB`;
 }
 
+/** A validated import file, ready to preview & apply. */
+interface ImportPreview {
+  fileName: string;
+  exportedAt?: string;
+  company?: string;
+  /** collection name → row count, in file order */
+  entries: { name: string; count: number }[];
+  data: Record<string, unknown[]>;
+}
+
+/**
+ * Validate the parsed 'Export all data' JSON. Requires a `data` object whose
+ * values are all arrays (the collections payload); `company` / `exportedAt`
+ * are optional metadata shown in the preview. Forward-compatible: collections
+ * are imported exactly as the file contains them — no hardcoded subset.
+ */
+function parseExportFile(fileName: string, text: string): ImportPreview {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new Error('Not a valid JSON file.');
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('Not an HRMS export file — expected a JSON object.');
+  }
+  const obj = parsed as Record<string, unknown>;
+  const data = obj.data;
+  if (!data || typeof data !== 'object' || Array.isArray(data)) {
+    throw new Error('Not an HRMS export file — missing the "data" collections payload.');
+  }
+  const entries = Object.entries(data as Record<string, unknown>).map(([name, items]) => {
+    if (!Array.isArray(items)) {
+      throw new Error(`Collection "${name}" is not a list — the file looks corrupted.`);
+    }
+    return { name, count: items.length };
+  });
+  if (entries.length === 0) {
+    throw new Error('The export contains no collections.');
+  }
+  const company = obj.company as { id?: unknown; name?: unknown; code?: unknown } | undefined;
+  return {
+    fileName,
+    exportedAt: typeof obj.exportedAt === 'string' ? obj.exportedAt : undefined,
+    company:
+      company && typeof company === 'object' && typeof company.name === 'string'
+        ? company.name
+        : undefined,
+    entries,
+    data: data as Record<string, unknown[]>,
+  };
+}
+
 export default function DataSection() {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [resetDone, setResetDone] = useState(false);
   const [reseeding, setReseeding] = useState(false);
   const [exported, setExported] = useState(false);
   const [refreshTick, setRefreshTick] = useState(0);
+  const [importPreview, setImportPreview] = useState<ImportPreview | null>(null);
+  const [importMode, setImportMode] = useState<'merge' | 'replace'>('merge');
+  const [importing, setImporting] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   // Re-render on audit + settings writes so the storage readout stays fresh —
   // nearly every mutation in the app appends to the audit collection.
   useCollection('audit');
@@ -45,10 +109,12 @@ export default function DataSection() {
   const onExport = () => {
     const data: Record<string, unknown[]> = {};
     for (const name of COLLECTIONS) data[name] = getCollection(name);
+    const company = getActiveCompany();
     const payload = {
       app: 'my-hrms-demo',
       version: 1,
       exportedAt: new Date().toISOString(),
+      company: company ? { id: company.id, code: company.code, name: company.name } : null,
       collections: COLLECTIONS.length,
       data,
     };
@@ -62,6 +128,78 @@ export default function DataSection() {
     logAudit({ actorName: DEMO_ACTOR, action: 'data.export', entity: 'settings', detail: 'Full JSON export downloaded' });
     setExported(true);
     window.setTimeout(() => setExported(false), 2500);
+  };
+
+  const onImportFile = async (file: File) => {
+    try {
+      const preview = parseExportFile(file.name, await file.text());
+      setImportMode('merge');
+      setImportPreview(preview);
+    } catch (err) {
+      toast.error('Import failed', {
+        description: err instanceof Error ? err.message : 'Could not read that file.',
+      });
+    }
+  };
+
+  const applyImport = () => {
+    if (!importPreview) return;
+    setImporting(true);
+    try {
+      // Restore into the ACTIVE tenant only — never the tenant the file came
+      // from. Unknown collection names (not in the registry) are skipped:
+      // they can't be read back by any current screen.
+      const tenant = getActiveTenantId() ?? 'co-asm';
+      const known = new Set<string>(COLLECTIONS);
+      let touched = 0;
+      let rows = 0;
+      const skipped: string[] = [];
+      for (const { name } of importPreview.entries) {
+        const items = importPreview.data[name];
+        if (!known.has(name)) {
+          skipped.push(name);
+          continue;
+        }
+        if (importMode === 'replace') {
+          setCollection(name as CollectionName, items, tenant);
+          rows += items.length;
+        } else {
+          // Merge by id: imported rows overwrite same-id rows, existing rows
+          // the file doesn't mention are kept.
+          const byId = new Map(
+            getCollection<{ id: string }>(name as CollectionName, tenant).map((r) => [r.id, r]),
+          );
+          for (const item of items) {
+            const id = (item as { id?: unknown })?.id;
+            if (typeof id === 'string') byId.set(id, item as { id: string });
+          }
+          const merged = [...byId.values()];
+          setCollection(name as CollectionName, merged, tenant);
+          rows += items.length;
+        }
+        touched += 1;
+      }
+      logAudit({
+        actorName: DEMO_ACTOR,
+        action: 'data.import',
+        entity: 'settings',
+        detail: `Imported ${touched} collection(s) from ${importPreview.fileName} (${importMode})${skipped.length ? `; skipped unknown: ${skipped.join(', ')}` : ''}`,
+      });
+      toast.success('Import complete', {
+        description:
+          `${touched} collection(s) ${importMode === 'merge' ? 'merged' : 'replaced'} ` +
+          `(${rows.toLocaleString()} rows from the file) into the active company.` +
+          (skipped.length ? ` Skipped unknown: ${skipped.join(', ')}.` : ''),
+      });
+      setImportPreview(null);
+      setRefreshTick((t) => t + 1);
+    } catch (err) {
+      toast.error('Import failed', {
+        description: err instanceof Error ? err.message : 'Could not apply the import.',
+      });
+    } finally {
+      setImporting(false);
+    }
   };
 
   const onReseed = async () => {
@@ -104,16 +242,87 @@ export default function DataSection() {
             <Download className="mr-1.5 h-4 w-4" />
             {exported ? 'Exported ✓' : 'Export all data (JSON)'}
           </Button>
-          <Button variant="outline" disabled title="Import validation tooling is planned for a later release">
+          <Button variant="outline" onClick={() => fileInputRef.current?.click()}>
             <Upload className="mr-1.5 h-4 w-4" />
             Import data
           </Button>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="application/json,.json"
+            className="hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              e.target.value = ''; // allow re-picking the same file
+              if (file) void onImportFile(file);
+            }}
+          />
         </div>
         <p className="text-xs text-muted-foreground">
           The export contains every collection (employees, attendance, leaves, claims, payroll runs, payslips, KPIs,
-          reviews, holidays, settings and audit) in one timestamped JSON file. Import is a placeholder for now.
+          reviews, holidays, settings and audit) in one timestamped JSON file. Import validates the file, shows a
+          preview, then restores into the <strong>active company</strong> — merging by record id or replacing
+          collections outright.
         </p>
       </SectionCard>
+
+      {/* Import preview & confirm */}
+      <Dialog open={importPreview !== null} onOpenChange={(o) => !o && setImportPreview(null)}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Import {importPreview?.fileName}?</DialogTitle>
+            <DialogDescription>
+              {importPreview?.exportedAt ? `Exported ${importPreview.exportedAt}` : 'HRMS export file'}
+              {importPreview?.company ? ` · from ${importPreview.company}` : ''} — restores into the
+              currently active company.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="max-h-56 overflow-y-auto rounded-xl border">
+            <ul className="divide-y text-sm">
+              {importPreview?.entries.map((e) => (
+                <li key={e.name} className="flex items-center justify-between px-3 py-1.5">
+                  <span className="font-mono text-xs">{e.name}</span>
+                  <span className="tabular-nums text-muted-foreground">
+                    {e.count.toLocaleString()} row{e.count === 1 ? '' : 's'}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+
+          <RadioGroup
+            value={importMode}
+            onValueChange={(v) => setImportMode(v as 'merge' | 'replace')}
+            className="gap-3"
+          >
+            <div className="flex items-start gap-2">
+              <RadioGroupItem value="merge" id="import-merge" className="mt-0.5" />
+              <Label htmlFor="import-merge" className="font-normal">
+                <span className="font-medium">Merge</span> — update records the file contains, keep
+                everything else. Existing records with the same id are overwritten.
+              </Label>
+            </div>
+            <div className="flex items-start gap-2">
+              <RadioGroupItem value="replace" id="import-replace" className="mt-0.5" />
+              <Label htmlFor="import-replace" className="font-normal">
+                <span className="font-medium">Replace</span> — each collection in the file replaces the
+                active company's collection entirely. Records not in the file are lost.
+              </Label>
+            </div>
+          </RadioGroup>
+
+          <DialogFooter className="gap-2">
+            <Button variant="outline" onClick={() => setImportPreview(null)} disabled={importing}>
+              Cancel
+            </Button>
+            <Button onClick={applyImport} disabled={importing}>
+              <Upload className="mr-1.5 h-4 w-4" />
+              {importing ? 'Importing…' : importMode === 'merge' ? 'Merge into active company' : 'Replace active company data'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <SectionCard icon={DatabaseBackup} title="Demo dataset">
         <div className="rounded-xl border border-destructive/40 bg-destructive/5 p-4">

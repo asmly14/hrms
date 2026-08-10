@@ -8,6 +8,7 @@
  * payslips — no rate is recomputed here.
  */
 import { AlertTriangle, Download, Landmark } from 'lucide-react';
+import { toast } from 'sonner';
 import type { Employee, PayrollRun, Payslip, Settings } from '@/lib/types';
 import { fmtRM, round2 } from '@/lib/utils';
 import { downloadTextFile, monthLabel, num2, toCsv } from './helpers';
@@ -45,8 +46,11 @@ export default function StatutoryOutputs({ run, slips, empMap, settings }: Props
     return !e?.bankName || !e?.bankAccount;
   });
 
-  const dl = (file: string, rows: (string | number)[][]) =>
-    downloadTextFile(`${file}-${mk}.csv`, toCsv(rows));
+  const dl = (file: string, rows: (string | number)[][]) => {
+    const filename = `${file}-${mk}.csv`;
+    downloadTextFile(filename, toCsv(rows));
+    toast.success('Download started', { description: filename });
+  };
 
   return (
     <div className="space-y-6">
@@ -394,6 +398,7 @@ export default function StatutoryOutputs({ run, slips, empMap, settings }: Props
                       `T|${slips.length}|${num2(sum((p) => p.netPay))}`,
                     ];
                     downloadTextFile(`bank-giro-${mk}.txt`, lines.join('\r\n'), 'text/plain');
+                    toast.success('Download started', { description: `bank-giro-${mk}.txt` });
                   }}
                 >
                   <Download className="h-4 w-4" /> TXT

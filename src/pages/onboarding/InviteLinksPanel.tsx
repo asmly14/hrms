@@ -5,6 +5,7 @@
  */
 import { useEffect, useMemo, useState } from 'react';
 import { Check, Copy, Eye, Link2, Mail, MessageCircle, Plus, XCircle } from 'lucide-react';
+import { toast } from 'sonner';
 import { useCollection, getActiveTenantId } from '@/lib/db';
 import {
   ONBOARD_LINK_STATUS_LABELS,
@@ -273,7 +274,12 @@ export default function InviteLinksPanel({ actorName }: Props) {
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
               onClick={() => {
-                if (revokeTarget) revokeOnboardLink(revokeTarget, actorName);
+                if (revokeTarget) {
+                  revokeOnboardLink(revokeTarget, actorName);
+                  toast.success(`Invite link for ${revokeTarget.label} revoked`, {
+                    description: 'The link stops working immediately — generate a fresh one anytime.',
+                  });
+                }
                 setRevokeTarget(null);
               }}
             >

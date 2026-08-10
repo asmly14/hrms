@@ -14,7 +14,7 @@
  *                 self quick actions, holidays and the statutory calendar.
  *                 No org charts, no payroll figures, no alerts naming others.
  */
-import { useAuth } from '@/lib/authContext';
+import { useAuth } from '@/lib/useAuth';
 import { fmtDate } from '@/lib/utils';
 import { StatCards } from './components/stat-cards';
 import { QuickActions } from './components/quick-actions';

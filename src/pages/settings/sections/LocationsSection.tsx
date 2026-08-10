@@ -19,7 +19,8 @@ import {
 } from '@/components/ui/alert-dialog';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
-import { DEMO_ACTOR, Field, SectionCard, numOr } from '../shared';
+import { DEMO_ACTOR, Field, SectionCard } from '../shared';
+import { numOr } from '../numOr';
 import { useSettingsData, type OfficeLocation } from '../store';
 
 interface LocForm {

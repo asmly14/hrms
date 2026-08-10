@@ -20,7 +20,8 @@ import {
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { DEMO_ACTOR, Field, SectionCard, numOr } from '../shared';
+import { DEMO_ACTOR, Field, SectionCard } from '../shared';
+import { numOr } from '../numOr';
 
 const POSITION_LEVELS: PositionLevel[] = ['junior', 'senior', 'lead', 'manager', 'exec'];
 

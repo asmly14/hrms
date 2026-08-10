@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ArrowLeft, ArrowRight, Check, Landmark, Receipt, ShieldCheck, User, Briefcase } from 'lucide-react';
+import { toast } from 'sonner';
 import { logAudit, useCollection } from '@/lib/db';
-import { useAuth } from '@/lib/authContext';
+import { useAuth } from '@/lib/useAuth';
 import { cn, fmtRM } from '@/lib/utils';
 import type { Department, Employee, Position } from '@/lib/types';
 import {
@@ -68,14 +69,18 @@ export function NewHireWizard({ open, onOpenChange }: NewHireWizardProps) {
   const [carryIn, setCarryIn] = useState<CarryInFormState>(emptyCarryIn());
   const [errors, setErrors] = useState<FormErrors>({});
 
-  useEffect(() => {
+  // Reset the wizard each time the dialog opens — render-phase adjust on the
+  // open edge, no effect.
+  const [prevOpen, setPrevOpen] = useState(open);
+  if (open !== prevOpen) {
+    setPrevOpen(open);
     if (open) {
       setStep(0);
       setForm(emptyForm());
       setCarryIn(emptyCarryIn());
       setErrors({});
     }
-  }, [open]);
+  }
 
   const patch = (p: Partial<EmployeeFormState>) => {
     setForm((f) => ({ ...f, ...p }));
@@ -116,6 +121,7 @@ export function NewHireWizard({ open, onOpenChange }: NewHireWizardProps) {
       if (idx >= 0) setStep(idx);
       else if (dup) setStep(0);
       setErrors(errs);
+      toast.error('Please fix the highlighted fields before completing the wizard.');
       return;
     }
     const record = employeeFromForm(form, carryIn);
@@ -127,6 +133,7 @@ export function NewHireWizard({ open, onOpenChange }: NewHireWizardProps) {
       entityId: saved.id,
       detail: `New hire ${record.name} onboarded via wizard${carryIn.enabled ? ' (TP3 carry-in captured)' : ''}`,
     });
+    toast.success(`New hire onboarded: ${record.name}`);
     onOpenChange(false);
     navigate(`/employees/${saved.id}`);
   };

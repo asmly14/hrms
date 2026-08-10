@@ -8,6 +8,7 @@ import { useMemo, useState } from 'react';
 import {
   CalendarDays, Info, Loader2, MapPin, Plus, RefreshCw, Trash2,
 } from 'lucide-react';
+import { toast } from 'sonner';
 import { logAudit, useCollection } from '@/lib/db';
 import {
   getEffectiveHolidays, refreshHolidays, stateInfo, states, type RefreshResult,
@@ -114,6 +115,11 @@ export default function HolidaysPage() {
       entity: 'holidays',
       detail: `Refresh ${year} ${stateCode}: source=${result.source}, updated=${result.updated}${result.error ? `, error=${result.error}` : ''}`,
     });
+    if (result.source === 'api') {
+      toast.success(`${result.updated} new holiday entr${result.updated === 1 ? 'y' : 'ies'} merged for ${stateInfo(stateCode).name} ${year}`);
+    } else {
+      toast.warning(`Live API unavailable${result.error ? ` (${result.error})` : ''} — using built-in gazetted calendar`);
+    }
   };
 
   const toggleNewState = (code: StateCode, checked: boolean) => {
@@ -122,14 +128,16 @@ export default function HolidaysPage() {
 
   const onAddOverride = () => {
     setFormError(null);
-    if (!newDate) { setFormError('Pick a date.'); return; }
+    if (!newDate) { setFormError('Pick a date.'); toast.error('Pick a date.'); return; }
     if (!newDate.startsWith(String(year))) {
       setFormError(`Date must fall within ${year} (the selected year).`);
+      toast.error(`Date must fall within ${year}.`);
       return;
     }
-    if (!newName.trim()) { setFormError('Enter a holiday name.'); return; }
+    if (!newName.trim()) { setFormError('Enter a holiday name.'); toast.error('Enter a holiday name.'); return; }
     if (!newNational && newStates.length === 0) {
       setFormError('Select at least one state, or mark it national.');
+      toast.error('Select at least one state, or mark it national.');
       return;
     }
     const added = holidaysApi.add({
@@ -148,6 +156,7 @@ export default function HolidaysPage() {
       entityId: added.id,
       detail: `${newName.trim()} on ${newDate} (${newNational ? 'ALL' : newStates.join(',')})`,
     });
+    toast.success(`Custom holiday added: ${newName.trim()} on ${fmtDate(newDate)}`);
     setNewDate('');
     setNewName('');
     setNewStates([]);
@@ -164,6 +173,7 @@ export default function HolidaysPage() {
       entityId: h.id,
       detail: `${h.name} on ${h.date}`,
     });
+    toast.success(`Custom holiday deleted: ${h.name}`);
   };
 
   return (

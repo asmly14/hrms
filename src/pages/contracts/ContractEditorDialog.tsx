@@ -9,6 +9,7 @@
  */
 import { useMemo, useState } from 'react';
 import { AlertTriangle, Briefcase, ScrollText } from 'lucide-react';
+import { toast } from 'sonner';
 import type { Employee } from '@/lib/types';
 import {
   CONTRACT_KIND_INFO,
@@ -148,7 +149,10 @@ function ContractEditorForm({
     Number.parseFloat(amount) > 0;
 
   function submit() {
-    if (!valid) return;
+    if (!valid) {
+      toast.error('Please complete the required fields before saving.');
+      return;
+    }
     const payload = {
       employeeId: kind === 'of-service' ? employeeId : undefined,
       contractorName: kind === 'for-service' ? contractorName.trim() : undefined,
@@ -193,6 +197,7 @@ function ContractEditorForm({
               : 'draft',
       });
       auditContracts('contract.update', existing.id, `${payload.refNo} updated`, actorName);
+      toast.success(`Contract updated: ${payload.refNo}`);
     } else {
       const created = add({
         ...payload,
@@ -206,6 +211,7 @@ function ContractEditorForm({
         `${payload.refNo} created (${kind === 'of-service' ? 'of service' : 'for service'})`,
         actorName,
       );
+      toast.success(`Contract created: ${payload.refNo}${activate ? '' : ' (draft)'}`);
     }
     onClose();
   }

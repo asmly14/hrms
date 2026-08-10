@@ -3,8 +3,9 @@
  * so HR confirms the package + org placement here (prefilled from the
  * submission / invite link) before the record is materialized.
  */
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { CheckCircle2 } from 'lucide-react';
+import { toast } from 'sonner';
 import { useCollection } from '@/lib/db';
 import {
   approveSubmission,
@@ -59,8 +60,13 @@ export default function ApproveSubmissionDialog({
   const [error, setError] = useState<string | null>(null);
   const [createdInfo, setCreatedInfo] = useState<{ id: string; employeeNo?: string } | null>(null);
 
-  useEffect(() => {
-    if (open && submission) {
+  // Hydrate the form when the dialog opens (per submission) — render-phase
+  // adjust keyed on (open, submission), no effect.
+  const openKey = open && submission ? submission.id : null;
+  const [hydratedKey, setHydratedKey] = useState<string | null>(null);
+  if (openKey !== hydratedKey) {
+    setHydratedKey(openKey);
+    if (openKey && submission) {
       setBaseSalary('');
       setPositionId(submission.employment.positionId ?? '');
       setDepartmentId(submission.employment.departmentId ?? '');
@@ -70,7 +76,7 @@ export default function ApproveSubmissionDialog({
       setError(null);
       setCreatedInfo(null);
     }
-  }, [open, submission]);
+  }
 
   if (!submission) return null;
 
@@ -86,9 +92,11 @@ export default function ApproveSubmissionDialog({
     });
     if (!result.ok) {
       setError(result.error);
+      toast.error(result.error);
       return;
     }
     setCreatedInfo({ id: result.employee.id, employeeNo: result.employee.employeeNo });
+    toast.success(`Submission approved — ${submission.personal.name} is now an employee`);
     onApproved?.(result.employee.id);
   };
 

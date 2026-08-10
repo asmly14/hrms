@@ -5,7 +5,7 @@
  */
 import { Link } from 'react-router-dom';
 import { ArrowRight, CalendarCheck, Receipt, Users, Wallet } from 'lucide-react';
-import { useAuth } from '@/lib/authContext';
+import { useAuth } from '@/lib/useAuth';
 import type { AuthRole } from '@/lib/auth';
 import { Card, CardContent } from '@/components/ui/card';
 

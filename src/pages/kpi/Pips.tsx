@@ -8,6 +8,7 @@ import { useMemo, useState } from 'react';
 import {
   CalendarClock, CheckCircle2, ClipboardList, Plus, Send, XCircle,
 } from 'lucide-react';
+import { toast } from 'sonner';
 import { logAudit, uid } from '@/lib/db';
 import { avatarTone, cn, fmtDate, initialsOf } from '@/lib/utils';
 import type { Employee } from '@/lib/types';
@@ -107,6 +108,9 @@ export default function Pips({ employees }: Props) {
       actorName: auth?.user?.username ?? 'KPI module', action: 'kpi.pipCreate', entity: 'pips',
       detail: `PIP started for ${empOf(empId)?.name ?? empId} — ${goals.length} goals, due ${endDate}`,
     });
+    toast.success(`PIP started for ${empOf(empId)?.name ?? empId}`, {
+      description: `${goals.length} goal${goals.length === 1 ? '' : 's'} · due ${fmtDate(endDate)}`,
+    });
     setOpen(false);
   }
 
@@ -134,6 +138,9 @@ export default function Pips({ employees }: Props) {
       actorName: auth?.user?.username ?? 'KPI module', action: 'kpi.pipNote', entity: 'pips', entityId: detail.id,
       detail: `${authorName} · check-in on ${empOf(detail.employeeId)?.name ?? detail.employeeId}'s PIP`,
     });
+    toast.success('Check-in note added', {
+      description: `${empOf(detail.employeeId)?.name ?? detail.employeeId}'s PIP · ${authorName}`,
+    });
   }
 
   function setStatus(p: Pip, status: Pip['status']) {
@@ -145,6 +152,11 @@ export default function Pips({ employees }: Props) {
       entity: 'pips', entityId: p.id,
       detail: `${empOf(p.employeeId)?.name ?? p.employeeId} · PIP ${status}`,
     });
+    if (status === 'completed') {
+      toast.success(`PIP completed for ${empOf(p.employeeId)?.name ?? p.employeeId}`);
+    } else {
+      toast.success(`PIP cancelled for ${empOf(p.employeeId)?.name ?? p.employeeId}`);
+    }
   }
 
   return (

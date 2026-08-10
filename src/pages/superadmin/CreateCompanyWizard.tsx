@@ -16,8 +16,9 @@ import { useNavigate } from 'react-router-dom';
 import {
   ArrowLeft, ArrowRight, Building2, Check, CheckCircle2, KeyRound, ShieldCheck,
 } from 'lucide-react';
-import { useAuth } from '@/lib/authContext';
-import { useTenant } from '@/lib/tenantContext';
+import { useAuth } from '@/lib/useAuth';
+import { useTenant } from '@/lib/useTenant';
+import { toast } from 'sonner';
 import { logAudit, uid, upsertCompany } from '@/lib/db';
 import { states } from '@/lib/holidays';
 import { defaultWorkingWeek } from '@/lib/tenants';
@@ -233,6 +234,11 @@ export default function CreateCompanyWizard(props: {
     );
     refreshCompanies();
     setError(null);
+    toast.success(`Company “${company.name}” created`, {
+      description: accountCreated
+        ? `Code ${code} · plan ${company.plan} · admin login ${data.username.trim()} ready`
+        : `Code ${code} · plan ${company.plan} · admin username ${data.username.trim()} already existed — not recreated`,
+    });
     setCreated({
       company,
       username: data.username.trim(),
@@ -244,6 +250,9 @@ export default function CreateCompanyWizard(props: {
   const enterNewCompany = () => {
     if (!created) return;
     setActiveCompany(created.company.id);
+    toast.success(`Entered ${created.company.name}`, {
+      description: `Now working inside tenant ${created.company.code} — all pages are scoped to it.`,
+    });
     handleOpenChange(false);
     navigate('/');
   };

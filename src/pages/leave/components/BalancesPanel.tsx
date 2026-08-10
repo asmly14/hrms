@@ -5,6 +5,7 @@
  */
 import { useMemo, useState } from 'react';
 import { Baby, HeartPulse, RefreshCw, Sun, Thermometer } from 'lucide-react';
+import { toast } from 'sonner';
 import { logAudit, type CollectionApi } from '@/lib/db';
 import { cn, fmtDate } from '@/lib/utils';
 import type { Employee, LeaveBalance } from '@/lib/types';
@@ -111,6 +112,7 @@ export default function BalancesPanel({ employees, balancesApi }: Props) {
       detail: `EA 1955 entitlements ${result} for ${emp.name} (${CURRENT_YEAR})`,
     });
     setSyncMsg(`${emp.name}: entitlements ${result} from EA 1955 tiers.`);
+    toast.success(`${emp.name}: entitlements ${result} from EA 1955 tiers`);
   };
 
   const onSyncAll = () => {
@@ -127,6 +129,7 @@ export default function BalancesPanel({ employees, balancesApi }: Props) {
       detail: `Bulk sync ${CURRENT_YEAR}: ${updated} updated, ${created} created for ${active.length} employees`,
     });
     setSyncMsg(`Synced ${active.length} employees — ${updated} updated, ${created} created.`);
+    toast.success(`Entitlements synced — ${updated} updated, ${created} created`);
   };
 
   if (!emp) return null;

@@ -20,8 +20,8 @@ import {
   Wallet,
 } from 'lucide-react';
 import { getCollection, useCollection } from '@/lib/db';
-import { useAuth } from '@/lib/authContext';
-import { useTenant } from '@/lib/tenantContext';
+import { useAuth } from '@/lib/useAuth';
+import { useTenant } from '@/lib/useTenant';
 import { stateInfo } from '@/lib/holidays';
 import { MINIMUM_WAGE } from '@/lib/statutory';
 import { suggestSalary } from '@/lib/salaryBenchmark';

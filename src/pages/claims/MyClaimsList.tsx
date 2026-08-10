@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import type { Employee } from '@/lib/types';
 import { logAudit, useCollection } from '@/lib/db';
+import { toast } from 'sonner';
 import { cn, fmtDate, fmtRM } from '@/lib/utils';
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
@@ -125,6 +126,7 @@ export default function MyClaimsList({ claims, employee, onNew, onEdit }: Props)
       entityId: c.id,
       detail: `${categoryMetaOf(c).label} — ${fmtRM(c.amount)} (${c.title.slice(0, 60)})`,
     });
+    toast.success(`Claim submitted for approval — ${fmtRM(c.amount)}`);
   }
 
   function backToDraft(c: ClaimRecord) {
@@ -143,6 +145,7 @@ export default function MyClaimsList({ claims, employee, onNew, onEdit }: Props)
       entityId: c.id,
       detail: 'Rejected claim returned to draft for rework',
     });
+    toast.success('Claim returned to draft for rework');
   }
 
   function deleteDraft() {
@@ -156,6 +159,7 @@ export default function MyClaimsList({ claims, employee, onNew, onEdit }: Props)
       entityId: pendingDelete.id,
       detail: `Draft deleted — ${categoryMetaOf(pendingDelete).label} ${fmtRM(pendingDelete.amount)}`,
     });
+    toast.success(`Draft claim deleted — ${categoryMetaOf(pendingDelete).label} ${fmtRM(pendingDelete.amount)}`);
     setPendingDelete(null);
   }
 

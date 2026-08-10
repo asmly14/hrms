@@ -25,7 +25,7 @@
  */
 import { useEffect } from 'react';
 import { getCollection, setCollection, uid, upsertCompany, useCollection } from '@/lib/db';
-import { useTenant } from '@/lib/tenantContext';
+import { useTenant } from '@/lib/useTenant';
 import type { Settings } from '@/lib/types';
 
 export const COMPANY_ID = 'company';

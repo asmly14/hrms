@@ -491,7 +491,12 @@ export function latestSubmissionForLink(
   tenantId?: string,
 ): OnboardSubmission | undefined {
   const list = getSubmissions(tenantId).filter((s) => s.linkId === linkId);
-  return list.sort((a, b) => b.submittedAt.localeCompare(a.submittedAt))[0];
+  // Tie-break identical millisecond timestamps: submissions are appended in
+  // chronological order, so the later array position is the later submission
+  // (a bare stable sort would keep the FIRST record on a same-ms resubmit).
+  return list
+    .map((s, i) => ({ s, i }))
+    .sort((a, b) => b.s.submittedAt.localeCompare(a.s.submittedAt) || b.i - a.i)[0]?.s;
 }
 
 export function markSubmitted(link: OnboardLink, submissionId: string): void {

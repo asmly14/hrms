@@ -6,8 +6,9 @@ import { Link, useNavigate } from 'react-router-dom';
 import {
   AlertTriangle, ChevronRight, FileText, Landmark, Play, RefreshCw, Undo2, Users, Wallet,
 } from 'lucide-react';
+import { toast } from 'sonner';
 import { useCollection } from '@/lib/db';
-import { useRole } from '@/lib/roleContext';
+import { useRole } from '@/lib/useRole';
 import { useAuthSafe } from './useAuthSafe';
 import { runPayroll, undoPayrollRun } from '@/lib/payrollEngine';
 import { fmtDate, fmtRM } from '@/lib/utils';
@@ -75,18 +76,29 @@ export default function PayrollHome() {
 
   const confirmRerun = () => {
     if (!rerunTarget) return;
+    const label = monthLabel(rerunTarget.monthKey);
     const res = runPayroll(
       rerunTarget.monthKey,
       rerunIds.length > 0 ? rerunIds : undefined,
       role,
     );
     setRerunTarget(null);
+    toast.success(`Payroll for ${label} re-run`, {
+      description: `${res.run.employeeCount} payslips regenerated${res.run.status === 'draft' ? ' as a draft — review and finalize from the run detail page' : ''}.`,
+    });
     navigate(`/payroll/runs/${res.run.id}`);
   };
 
   const confirmUndo = () => {
     if (!undoTarget) return;
-    undoPayrollRun(undoTarget.id, role);
+    const label = monthLabel(undoTarget.monthKey);
+    if (undoPayrollRun(undoTarget.id, role)) {
+      toast.success(`Payroll run for ${label} undone`, {
+        description: 'Run and payslips deleted; paid claims reverted to approved.',
+      });
+    } else {
+      toast.error(`Could not undo the ${label} run`);
+    }
     setUndoTarget(null);
   };
 

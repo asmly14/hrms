@@ -4,6 +4,7 @@
  */
 import { useMemo, useState } from 'react';
 import { ChevronDown, UserRound } from 'lucide-react';
+import { toast } from 'sonner';
 import type { Employee } from '@/lib/types';
 import {
   ONBOARDING_CATEGORIES,
@@ -71,6 +72,9 @@ export default function ChecklistCard({ checklist, employee, buddy, actorName }:
       `${checked ? 'Done' : 'Reopened'}: ${item?.label ?? itemId} (${employee?.name ?? checklist.employeeId})`,
       actorName,
     );
+    if (checked && deriveOnboardingStatus(items) === 'completed' && checklist.status !== 'completed') {
+      toast.success(`Onboarding checklist completed for ${employee?.name ?? checklist.employeeId}`);
+    }
   }
 
   return (

@@ -7,7 +7,7 @@
  * (doc id 'company') is mirrored so payslips, statutory forms and the legacy
  * Settings page keep working unchanged.
  */
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Building2, Landmark } from 'lucide-react';
 import { useCollection } from '@/lib/db';
 import { states } from '@/lib/holidays';
@@ -47,13 +47,15 @@ export default function ProfileSection() {
 
   // Initialise once BOTH the Company record and the settings singleton are
   // present; re-seed only when switching to a different company.
+  // Render-phase adjusts — no effects.
   const companyId = company?.id;
-  useEffect(() => {
+  const [prevCompanyId, setPrevCompanyId] = useState(companyId);
+  if (prevCompanyId !== companyId) {
+    setPrevCompanyId(companyId);
     setDraft(null);
     setDirty(false);
-  }, [companyId]);
-  useEffect(() => {
-    if (!company || !singleton || draft) return;
+  }
+  if (company && singleton && draft === null) {
     setDraft({
       name: company.name,
       regNo: company.regNo,
@@ -64,7 +66,7 @@ export default function ProfileSection() {
       taxEmployerNo: typeof singleton.taxEmployerNo === 'string' ? singleton.taxEmployerNo : '',
       hrdCorpRegNo: typeof extras?.hrdCorpRegNo === 'string' ? extras.hrdCorpRegNo : '',
     });
-  }, [company, singleton, extras, draft]);
+  }
 
   if (!company || !draft) {
     return (

@@ -6,7 +6,7 @@
  */
 import { useMemo, useState } from 'react';
 import { Activity, Building2 } from 'lucide-react';
-import { useTenant } from '@/lib/tenantContext';
+import { useTenant } from '@/lib/useTenant';
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';

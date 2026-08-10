@@ -11,7 +11,7 @@ import {
   AlertCircle, Building2, CalendarCheck, Eye, EyeOff, Lock, ShieldCheck,
   User, Wallet,
 } from 'lucide-react';
-import { useAuth } from '@/lib/authContext';
+import { useAuth } from '@/lib/useAuth';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';

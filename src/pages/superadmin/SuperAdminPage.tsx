@@ -10,8 +10,8 @@
  */
 import { useNavigate } from 'react-router-dom';
 import { ShieldAlert, ShieldCheck } from 'lucide-react';
-import { useAuth } from '@/lib/authContext';
-import { useTenant } from '@/lib/tenantContext';
+import { useAuth } from '@/lib/useAuth';
+import { useTenant } from '@/lib/useTenant';
 import { Button } from '@/components/ui/button';
 import {
   Card, CardContent, CardDescription, CardHeader, CardTitle,

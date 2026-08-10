@@ -1,9 +1,14 @@
 /**
  * Mock authentication CORE — user accounts, seeding, sessions (MULTI-TENANT).
  *
- * DEMO ONLY: passwords are stored in plaintext in localStorage. There is no
- * backend; this module exists so the app can exercise real login / logout /
- * role-based data scoping flows before a real IdP is wired in.
+ * DEMO ONLY: there is no backend; this module exists so the app can exercise
+ * real login / logout / role-based data scoping flows before a real IdP is
+ * wired in. Passwords are stored as bcrypt hashes (bcryptjs, cost factor 8 —
+ * keeps demo login latency at ~15ms while never persisting plaintext at
+ * rest). Legacy plaintext entries written by older builds are transparently
+ * migrated to hashes on their first successful login (see verifyAndMigrate).
+ * The documented demo passwords themselves (admin123, super123, …) are
+ * unchanged — only the at-rest storage format changed.
  *
  * Storage keys (GLOBAL — shared across tenants):
  *   - 'hrms.users'   → UserAccount[] (the account directory, all companies)
@@ -36,9 +41,13 @@
  * `seedUsers()` first, so accounts appear even if demo seeding finished after
  * the first page load.
  */
+import bcrypt from 'bcryptjs';
 import { getCollection, getCompanies, setActiveTenantId, uid } from './db';
 import { COMPANY_ID_ASM, COMPANY_ID_DESA, COMPANY_ID_MERDEKA, COMPANY_ID_ASMDIV } from './tenants';
 import type { Employee } from './types';
+
+/** bcrypt cost factor. 8 keeps the pure-JS demo login fast (~15ms/verify). */
+export const BCRYPT_ROUNDS = 8;
 
 /** Display-name role (matches AppRole in roleContext.tsx, plus SuperAdmin). */
 export type AuthRole = 'Admin' | 'HR' | 'Manager' | 'Employee' | 'SuperAdmin';
@@ -46,8 +55,18 @@ export type AuthRole = 'Admin' | 'HR' | 'Manager' | 'Employee' | 'SuperAdmin';
 export interface UserAccount {
   id: string;
   username: string;
-  /** DEMO ONLY — plaintext. Never do this against a real backend. */
-  password: string;
+  /**
+   * bcrypt hash ($2b$08$…) of the account password. Absent ONLY on legacy
+   * accounts written before hashing shipped — those are migrated on their
+   * first successful login and then carry a hash going forward.
+   */
+  passwordHash?: string;
+  /**
+   * LEGACY plaintext password. Never written by current code; kept as an
+   * optional field only so pre-migration `hrms.users` directories still
+   * parse. Deleted from the account the moment it is migrated to a hash.
+   */
+  password?: string;
   /**
    * Tenant this account belongs to. REQUIRED for every role — the sole
    * exception is SuperAdmin, which is cross-company and carries `null`.
@@ -58,8 +77,8 @@ export interface UserAccount {
   role: AuthRole;
 }
 
-/** UserAccount without the password — safe to expose to the UI tree. */
-export type PublicUser = Omit<UserAccount, 'password'>;
+/** UserAccount without any credential material — safe to expose to the UI tree. */
+export type PublicUser = Omit<UserAccount, 'password' | 'passwordHash'>;
 
 export interface Session {
   userId: string;
@@ -79,8 +98,15 @@ export type LoginResult =
 const USERS_KEY = 'hrms.users';
 const SESSION_KEY = 'hrms.session';
 
-/** Fixed demo accounts (besides the per-employee derived ones). */
-const FIXED_ACCOUNTS: UserAccount[] = [
+/**
+ * Fixed demo accounts (besides the per-employee derived ones). These are SEED
+ * constants: they carry the documented plaintext demo passwords so seedUsers()
+ * can hash them on first write — the hashes (not these strings) are what end
+ * up in `hrms.users`.
+ */
+type FixedAccountSeed = Omit<UserAccount, 'password' | 'passwordHash'> & { password: string };
+
+const FIXED_ACCOUNTS: FixedAccountSeed[] = [
   // System SuperAdmin — cross-company, no employee link, no fixed tenant.
   { id: 'user-superadmin', username: 'superadmin', password: 'super123', role: 'SuperAdmin', companyId: null },
   // ASM Tech (co-asm)
@@ -132,9 +158,45 @@ function writeUsers(users: UserAccount[]): void {
 }
 
 function stripPassword(account: UserAccount): PublicUser {
-  const { password: _pw, ...pub } = account;
+  const { password: _pw, passwordHash: _hash, ...pub } = account;
   void _pw;
+  void _hash;
   return pub;
+}
+
+/** True when the stored value is a bcrypt hash ($2a$/$2b$/$2y$ + cost). */
+function isBcryptHash(v: string | undefined): v is string {
+  return typeof v === 'string' && /^\$2[aby]\$\d{2}\$/.test(v);
+}
+
+/** bcrypt-hash a plaintext demo password for at-rest storage. */
+function hashPassword(plaintext: string): string {
+  return bcrypt.hashSync(plaintext, BCRYPT_ROUNDS);
+}
+
+/** Persist a single account mutation back into the directory (matched by id). */
+function updateUser(updated: UserAccount): void {
+  writeUsers(readUsers().map((u) => (u.id === updated.id ? updated : u)));
+}
+
+/**
+ * Verify a login attempt against an account. Hashed accounts compare via
+ * bcrypt. Legacy plaintext entries (pre-hashing builds, or direct
+ * localStorage writes) compare directly and — on success — are transparently
+ * migrated: hash stored, plaintext deleted. Fails closed when the account
+ * carries neither a hash nor a legacy plaintext password.
+ */
+function verifyAndMigrate(account: UserAccount, password: string): boolean {
+  if (isBcryptHash(account.passwordHash)) {
+    return bcrypt.compareSync(password, account.passwordHash);
+  }
+  if (typeof account.password === 'string' && account.password === password) {
+    const migrated: UserAccount = { ...account, passwordHash: hashPassword(password) };
+    delete migrated.password;
+    updateUser(migrated);
+    return true;
+  }
+  return false;
 }
 
 /** Username for an employee's derived account: email local-part, lowercased. */
@@ -153,11 +215,14 @@ export function seedUsers(): UserAccount[] {
   const existing = readUsers();
   const byUsername = new Map(existing.map((u) => [u.username, u]));
 
-  // Fixed accounts first (superadmin / admins / hr / managers).
+  // Fixed accounts first (superadmin / admins / hr / managers) — seeded with
+  // a bcrypt hash of their documented demo password, never the plaintext.
   for (const acc of FIXED_ACCOUNTS) {
     if (!byUsername.has(acc.username)) {
-      existing.push(acc);
-      byUsername.set(acc.username, acc);
+      const { password, ...rest } = acc;
+      const stored: UserAccount = { ...rest, passwordHash: hashPassword(password) };
+      existing.push(stored);
+      byUsername.set(acc.username, stored);
     }
   }
 
@@ -181,7 +246,7 @@ export function seedUsers(): UserAccount[] {
       const acc: UserAccount = {
         id: uid(),
         username,
-        password: DEMO_PASSWORD,
+        passwordHash: hashPassword(DEMO_PASSWORD),
         companyId: company.id,
         employeeId: emp.id,
         role: 'Employee',
@@ -213,7 +278,7 @@ export function login(username: string, password: string): LoginResult {
   }
   seedUsers(); // make sure late-arriving demo seed data has accounts
   const account = findUser(username);
-  if (!account || account.password !== password) {
+  if (!account || !verifyAndMigrate(account, password)) {
     return { ok: false, error: 'Invalid username or password.' };
   }
   const session: Session = {

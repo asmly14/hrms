@@ -9,6 +9,7 @@ import { useMemo, useState } from 'react';
 import {
   AlertTriangle, Briefcase, Clock3, Loader2, LogIn, LogOut, MapPin, ShieldCheck,
 } from 'lucide-react';
+import { toast } from 'sonner';
 import { logAudit, useCollection } from '@/lib/db';
 import type { Employee } from '@/lib/types';
 import { cn } from '@/lib/utils';
@@ -126,6 +127,7 @@ export default function ClockPanel() {
     if (record?.clockIn) return;
     if (workMode === 'job-site' && !jobSite.trim()) {
       setMessage('Enter the job-site name before clocking in (required for service staff).');
+      toast.error('Enter the job-site name before clocking in.');
       return;
     }
     setMessage('');
@@ -197,6 +199,14 @@ export default function ClockPanel() {
           ? 'Location unavailable: this record is flagged for HR review.'
           : ''),
     );
+    toast.success(`${emp.name} clocked in at ${time}${isLate(time, shift) ? ' (late)' : ''}`);
+    if (result.kind === 'failed' && workMode === 'office') {
+      toast.warning(`Location unavailable (${result.reason}) — record flagged for HR review.`);
+    } else if (patch.geoStatus === 'outside') {
+      toast.warning(
+        `Outside geofence — ${patch.geoDistanceM !== undefined ? `${patch.geoDistanceM} m from ` : ''}${patch.geoPlace ?? 'site'}.`,
+      );
+    }
   };
 
   const doClockOut = () => {
@@ -211,6 +221,7 @@ export default function ClockPanel() {
       detail: `${emp?.name ?? record.employeeId} clocked out at ${time}`,
     });
     setMessage(`Clocked out at ${time}. Have a good rest!`);
+    toast.success(`${emp?.name ?? record.employeeId} clocked out at ${time}`);
   };
 
   if (employees.length === 0) {

@@ -5,6 +5,7 @@
  */
 import { useMemo, useState } from 'react';
 import { AlertTriangle, CalendarClock, ChevronDown, FileText, FileWarning, HandCoins, UserMinus } from 'lucide-react';
+import { toast } from 'sonner';
 import type { Employee } from '@/lib/types';
 import { useCollection } from '@/lib/db';
 import {
@@ -98,6 +99,10 @@ export default function OffboardingCaseCard({ kase, employee, actorName }: Props
       `${checked ? 'Cleared' : 'Reopened'}: ${item?.label ?? itemId} (${employee?.name ?? kase.employeeId})`,
       actorName,
     );
+    const cleared = items.filter((i) => i.done).length;
+    toast.success(checked ? `Cleared: ${item?.label ?? 'item'}` : `Reopened: ${item?.label ?? 'item'}`, {
+      description: `${employee?.name ?? kase.employeeId} · ${cleared}/${items.length} clearance items done`,
+    });
   }
 
   function markResigned() {
@@ -110,6 +115,9 @@ export default function OffboardingCaseCard({ kase, employee, actorName }: Props
       `${employee.name} marked resigned (LWD ${kase.lastWorkingDay}, ${OFFBOARDING_REASON_LABELS[kase.reason].toLowerCase()}) via offboarding case`,
       actorName,
     );
+    toast.success(`${employee.name} marked resigned`, {
+      description: `Last working day ${fmtDate(kase.lastWorkingDay)} · final-pay estimate ${fmtRM(kase.finalPay.estimatedTotal)}`,
+    });
   }
 
   const fp = kase.finalPay;

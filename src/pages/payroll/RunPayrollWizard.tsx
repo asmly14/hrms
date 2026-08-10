@@ -8,8 +8,9 @@ import {
   AlertTriangle, BadgeCheck, ChevronLeft, ChevronRight, CircleAlert,
   ClipboardCheck, Globe2, Play, Search,
 } from 'lucide-react';
+import { toast } from 'sonner';
 import { useCollection } from '@/lib/db';
-import { useRole } from '@/lib/roleContext';
+import { useRole } from '@/lib/useRole';
 import { useAuthSafe } from './useAuthSafe';
 import { runPayroll, type PayrollResult } from '@/lib/payrollEngine';
 import { MAX_OT_HOURS_MONTH, MINIMUM_WAGE } from '@/lib/statutory';
@@ -143,6 +144,9 @@ export default function RunPayrollWizard({ open, onOpenChange, onCompleted }: Wi
     // adjust per-employee lines (CP38 / Zakat / PTPTN / custom), exclude or
     // reset employees on the run detail page, then finalize to lock it.
     const res = runPayroll(month, ids, role, { draft: true });
+    toast.success(`Draft payroll for ${monthLabel(month)} created`, {
+      description: `${res.run.employeeCount} payslips generated — review and finalize on the run detail page.`,
+    });
     setResult(res);
     setStep(3);
   };

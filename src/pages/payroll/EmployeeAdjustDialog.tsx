@@ -12,8 +12,9 @@
  * the adjusted wages and retallies the run. Draft runs only — the parent
  * page never opens this for finalized runs.
  */
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { CircleMinus, Plus, RotateCcw, Trash2 } from 'lucide-react';
+import { toast } from 'sonner';
 import {
   adjustmentLabel, excludeEmployeeFromRun, resetPayslipToDefaults, setPayslipAdjustments,
 } from '@/lib/payrollEngine';
@@ -70,15 +71,32 @@ export default function EmployeeAdjustDialog({
 
   // Sync the editor with the stored payslip whenever it changes (e.g. after
   // an engine recompute) or when the dialog opens for another employee.
-  useEffect(() => {
+  // Render-phase adjust keyed on (payslip id, adjustments ref, open) — the
+  // same identity check the old effect's dep array made, without the
+  // cascading post-commit update.
+  const [synced, setSynced] = useState<{
+    id: string | undefined;
+    adjustments: PayslipAdjustment[] | undefined;
+    open: boolean;
+  } | null>(null);
+  if (
+    synced === null ||
+    synced.id !== payslip?.id ||
+    synced.adjustments !== payslip?.adjustments ||
+    synced.open !== open
+  ) {
+    setSynced({ id: payslip?.id, adjustments: payslip?.adjustments, open });
     setAdjustments(payslip?.adjustments ?? []);
-  }, [payslip?.id, payslip?.adjustments, open]); // eslint-disable-line react-hooks/exhaustive-deps
+  }
 
   const presets = kind === 'deduction' ? DEDUCTION_PRESETS : EARNING_PRESETS;
 
-  useEffect(() => {
+  // Default preset follows the adjustment kind — render-phase adjust.
+  const [prevKind, setPrevKind] = useState(kind);
+  if (prevKind !== kind) {
+    setPrevKind(kind);
     setPreset(kind === 'deduction' ? 'cp38' : 'custom');
-  }, [kind]);
+  }
 
   // Live panel: mirror the engine's math on the EDITED adjustment list so the
   // figures move before saving. Statutory employee deductions stay as stored
@@ -124,18 +142,37 @@ export default function EmployeeAdjustDialog({
 
   const save = () => {
     const next = setPayslipAdjustments(runId, employee.id, adjustments, actor);
-    if (next) onChanged();
+    if (next) {
+      toast.success(`Adjustments saved for ${employee.name}`, {
+        description: 'Statutory figures recomputed on the adjusted wages.',
+      });
+      onChanged();
+    } else {
+      toast.error(`Could not save adjustments for ${employee.name}`);
+    }
   };
 
   const reset = () => {
     const next = resetPayslipToDefaults(runId, employee.id, actor);
-    if (next) onChanged();
+    if (next) {
+      toast.success(`${employee.name} reset to defaults`, {
+        description: 'All ad-hoc adjustment lines were dropped.',
+      });
+      onChanged();
+    } else {
+      toast.error(`Could not reset ${employee.name}`);
+    }
   };
 
   const exclude = () => {
     if (excludeEmployeeFromRun(runId, employee.id, actor)) {
+      toast.success(`${employee.name} excluded from this run`, {
+        description: 'Their draft payslip was removed; the run totals were retallied.',
+      });
       onChanged();
       onExcluded();
+    } else {
+      toast.error(`Could not exclude ${employee.name} from this run`);
     }
   };
 

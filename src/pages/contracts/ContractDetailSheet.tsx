@@ -11,6 +11,7 @@ import {
   ReceiptText,
   ShieldAlert,
 } from 'lucide-react';
+import { toast } from 'sonner';
 import type { Employee } from '@/lib/types';
 import {
   CONTRACT_STATUS_LABELS,
@@ -110,19 +111,31 @@ export default function ContractDetailSheet({
 
   function renew() {
     const draft = renewContract(c!.id, actorName, today);
-    if (draft) onOpenContract(draft.id);
+    if (draft) {
+      toast.success(`Renewal draft created from ${c!.refNo}`);
+      onOpenContract(draft.id);
+    } else {
+      toast.error('This contract cannot be renewed.');
+    }
   }
 
   function terminate() {
-    if (!termDate || !termReason.trim()) return;
+    if (!termDate || !termReason.trim()) {
+      toast.error('Enter a termination date and reason.');
+      return;
+    }
     terminateContract(c!.id, termDate, termReason.trim(), actorName);
+    toast.success(`Contract ${c!.refNo} terminated`);
     setTerminateOpen(false);
     setTermReason('');
   }
 
   function submitFee() {
     const amount = Number.parseFloat(feeAmount);
-    if (!feeDate || !feeRef.trim() || !(amount > 0)) return;
+    if (!feeDate || !feeRef.trim() || !(amount > 0)) {
+      toast.error('Enter a date, reference and amount above RM 0.');
+      return;
+    }
     const created = addFee({
       contractId: c!.id,
       date: feeDate,
@@ -137,6 +150,7 @@ export default function ContractDetailSheet({
       `${c!.refNo} fee ${feeRef.trim()} ${fmtRM(round2(amount))} logged`,
       actorName,
     );
+    toast.success(`Fee logged: ${feeRef.trim()} — ${fmtRM(round2(amount))}`);
     setFeeRef('');
     setFeeAmount('');
   }
@@ -333,9 +347,10 @@ export default function ContractDetailSheet({
                         <button
                           type="button"
                           title="Toggle paid / pending"
-                          onClick={() =>
-                            updateFee(p.id, { status: p.status === 'paid' ? 'pending' : 'paid' })
-                          }
+                          onClick={() => {
+                            updateFee(p.id, { status: p.status === 'paid' ? 'pending' : 'paid' });
+                            toast.success(`Fee ${p.reference} marked ${p.status === 'paid' ? 'pending' : 'paid'}`);
+                          }}
                         >
                           <Badge
                             variant="secondary"

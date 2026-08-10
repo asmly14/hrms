@@ -14,8 +14,9 @@ import {
   AlertTriangle, ArrowLeft, BadgeCheck, ChevronRight, Search, SlidersHorizontal,
   Undo2, Users, Wallet,
 } from 'lucide-react';
+import { toast } from 'sonner';
 import { useCollection } from '@/lib/db';
-import { useRole } from '@/lib/roleContext';
+import { useRole } from '@/lib/useRole';
 import { finalizePayrollRun, undoPayrollRun } from '@/lib/payrollEngine';
 import { fmtDate, fmtRM, round2 } from '@/lib/utils';
 import type {
@@ -114,13 +115,23 @@ export default function RunDetail() {
 
   const doFinalize = () => {
     finalizePayrollRun(run.id, role);
+    toast.success(`${monthLabel(run.monthKey)} payroll finalized`, {
+      description: `${slips.length} payslip(s) locked · statutory outputs and bank giro are now available.`,
+    });
     setConfirmFinalize(false);
   };
 
   const doUndo = () => {
+    const label = monthLabel(run.monthKey);
     if (undoPayrollRun(run.id, role)) {
+      toast.success(`Payroll run for ${label} undone`, {
+        description: 'Run and payslips deleted; paid claims reverted to approved.',
+      });
       setConfirmUndo(false);
       navigate('/payroll');
+    } else {
+      toast.error(`Could not undo the ${label} run`);
+      setConfirmUndo(false);
     }
   };
 

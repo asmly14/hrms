@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
+import { toast } from 'sonner';
 import { logAudit, useCollection } from '@/lib/db';
-import { useAuth } from '@/lib/authContext';
-import { useTenant } from '@/lib/tenantContext';
+import { useAuth } from '@/lib/useAuth';
+import { useTenant } from '@/lib/useTenant';
 import type { Department, Employee, Position } from '@/lib/types';
 import { coerceCustomValue, getEmployeeCustomFields } from '@/pages/company/customFields';
 import {
@@ -131,7 +132,10 @@ export function EmployeeFormDialog({ open, onOpenChange, employee, onSaved }: Em
     const errs = validateAll(form, carryIn);
     setErrors(errs);
     setSubmitted(true);
-    if (Object.keys(errs).length > 0) return;
+    if (Object.keys(errs).length > 0) {
+      toast.error('Please fix the highlighted fields before saving.');
+      return;
+    }
 
     const record = employeeFromForm(form, carryIn, employee);
     // Additive custom-field values (undefined entries dropped so cleared
@@ -157,6 +161,7 @@ export function EmployeeFormDialog({ open, onOpenChange, employee, onSaved }: Em
         entityId: employee.id,
         detail: `Updated ${record.name}`,
       });
+      toast.success(`Employee updated: ${record.name}`);
     } else {
       saved = add(recordWithCustom as Omit<Employee, 'id'>);
       logAudit({
@@ -166,6 +171,7 @@ export function EmployeeFormDialog({ open, onOpenChange, employee, onSaved }: Em
         entityId: saved.id,
         detail: `Added ${record.name} (${record.employmentType})`,
       });
+      toast.success(`Employee added: ${record.name}`);
     }
     onSaved?.(saved);
     onOpenChange(false);

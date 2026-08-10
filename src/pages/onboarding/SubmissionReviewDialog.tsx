@@ -5,7 +5,8 @@
  * ApproveSubmissionDialog; Reject asks for a reason inline and re-opens the
  * link for the applicant to resubmit.
  */
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
+import { toast } from 'sonner';
 import { Download, FileText, ThumbsDown, ThumbsUp } from 'lucide-react';
 import {
   rejectSubmission,
@@ -75,12 +76,16 @@ export default function SubmissionReviewDialog({
   const [rejecting, setRejecting] = useState(false);
   const [reason, setReason] = useState('');
 
-  useEffect(() => {
+  // Reset the inline reject form each time the dialog opens — render-phase
+  // adjust on the open edge, no effect.
+  const [prevOpen, setPrevOpen] = useState(open);
+  if (open !== prevOpen) {
+    setPrevOpen(open);
     if (open) {
       setRejecting(false);
       setReason('');
     }
-  }, [open]);
+  }
 
   if (!submission) return null;
 
@@ -94,6 +99,9 @@ export default function SubmissionReviewDialog({
   const confirmReject = () => {
     if (!reason.trim()) return;
     rejectSubmission(submission, reason, actorName);
+    toast.success(`Submission returned to ${p.name}`, {
+      description: 'The link is re-opened so the applicant can resubmit.',
+    });
     onOpenChange(false);
   };
 

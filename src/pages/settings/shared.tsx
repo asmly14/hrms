@@ -41,14 +41,6 @@ export function Field(props: { label: string; hint?: string; children: ReactNode
   );
 }
 
-/** Parses a number input value, falling back when blank / non-numeric. */
-export function numOr(value: string, fallback: number): number {
-  // Number('') === 0 — a cleared field must hit the fallback, not save 0.
-  if (value.trim() === '') return fallback;
-  const n = Number(value);
-  return Number.isFinite(n) ? n : fallback;
-}
-
 /** Save button with a transient "Saved" confirmation. */
 export function SaveButton({ onSave, disabled }: { onSave: () => void; disabled?: boolean }) {
   const [saved, setSaved] = useState(false);

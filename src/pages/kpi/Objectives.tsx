@@ -11,6 +11,7 @@ import { useMemo, useState } from 'react';
 import {
   ChevronDown, ChevronRight, CornerDownRight, Pencil, Plus, Target, Trash2,
 } from 'lucide-react';
+import { toast } from 'sonner';
 import { logAudit, uid } from '@/lib/db';
 import { avatarTone, cn, initialsOf } from '@/lib/utils';
 import type { Department, Employee } from '@/lib/types';
@@ -159,9 +160,15 @@ export default function Objectives({ employees, departments }: Props) {
     if (editing) {
       update(editing.id, payload);
       logAudit({ actorName: auth?.user?.username ?? 'KPI module', action: 'kpi.objectiveUpdate', entity: 'objectives', entityId: editing.id, detail: payload.title });
+      toast.success(`Objective “${payload.title}” updated`, {
+        description: `${empOf(payload.employeeId)?.name ?? payload.employeeId} · ${payload.period} · ${krs.length} key result${krs.length === 1 ? '' : 's'}`,
+      });
     } else {
       const created = add({ ...payload, status: 'active', createdAt: new Date().toISOString() });
       logAudit({ actorName: auth?.user?.username ?? 'KPI module', action: 'kpi.objectiveCreate', entity: 'objectives', entityId: created.id, detail: payload.title });
+      toast.success(`Objective “${payload.title}” created`, {
+        description: `${empOf(payload.employeeId)?.name ?? payload.employeeId} · ${payload.period} · ${krs.length} key result${krs.length === 1 ? '' : 's'}`,
+      });
     }
     setFormOpen(false);
   }

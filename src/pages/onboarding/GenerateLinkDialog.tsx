@@ -3,8 +3,9 @@
  * position/department, expiry (default 14 days). After creation the dialog
  * shows the shareable URL with copy + WhatsApp + email share actions.
  */
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Check, Copy, Link2, Mail, MessageCircle } from 'lucide-react';
+import { toast } from 'sonner';
 import { useCollection } from '@/lib/db';
 import {
   DEFAULT_EXPIRY_DAYS,
@@ -52,7 +53,11 @@ export default function GenerateLinkDialog({ open, onOpenChange, actorName, comp
   const [created, setCreated] = useState<OnboardLink | null>(null);
   const [copied, setCopied] = useState(false);
 
-  useEffect(() => {
+  // Reset the form each time the dialog opens — render-phase adjust on the
+  // open edge, no effect.
+  const [prevOpen, setPrevOpen] = useState(open);
+  if (open !== prevOpen) {
+    setPrevOpen(open);
     if (open) {
       setLabel('');
       setPositionId('none');
@@ -61,7 +66,7 @@ export default function GenerateLinkDialog({ open, onOpenChange, actorName, comp
       setCreated(null);
       setCopied(false);
     }
-  }, [open]);
+  }
 
   const url = useMemo(() => (created ? buildOnboardUrl(created.token) : ''), [created]);
 
@@ -77,12 +82,16 @@ export default function GenerateLinkDialog({ open, onOpenChange, actorName, comp
       expiryDays: days,
     });
     setCreated(link);
+    toast.success(`Invite link generated for ${label.trim()}`);
   };
 
   const copy = async () => {
     if (await copyText(url)) {
       setCopied(true);
+      toast.success('Link copied to clipboard');
       setTimeout(() => setCopied(false), 1600);
+    } else {
+      toast.error('Copy failed — select the link and copy it manually.');
     }
   };
 

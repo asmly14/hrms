@@ -6,6 +6,7 @@
  */
 import { useMemo, useState } from 'react';
 import { AlertTriangle, CalendarClock, CheckCircle2, Info, Send } from 'lucide-react';
+import { toast } from 'sonner';
 import { logAudit, type CollectionApi } from '@/lib/db';
 import { orpFromMonthly } from '@/lib/statutory';
 import { daysBetween, fmtDate, fmtRM, round2 } from '@/lib/utils';
@@ -150,6 +151,7 @@ export default function ApplyLeaveForm({ employees, leavesApi, balances }: Props
       detail: `${emp.name} applied ${count.days}d ${type} (${startDate} → ${endDate})`,
     });
     setSubmitted(`${LEAVE_TYPE_META[type].label} leave submitted for ${emp.name} — ${count.days} day(s), pending approval.`);
+    toast.success(`${LEAVE_TYPE_META[type].label} leave submitted for ${emp.name} — ${count.days} day(s)`);
     setReason('');
     setHalfDay(false);
   };

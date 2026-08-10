@@ -6,10 +6,15 @@
 import { lazy, Suspense, type ReactNode } from 'react';
 import { Link, Navigate, Outlet, Route, Routes, useLocation } from 'react-router-dom';
 import { AppWindow, type LucideIcon } from 'lucide-react';
-import AppLayout, { useEffectiveRole } from '@/components/layout/AppLayout';
+import AppLayout from '@/components/layout/AppLayout';
+import { useEffectiveRole } from '@/components/layout/useEffectiveRole';
+import { useDarkClass } from '@/components/layout/useDarkClass';
+import { Toaster } from '@/components/ui/sonner';
 import { RoleProvider, type AppRole } from '@/lib/roleContext';
-import { AuthProvider, useAuth } from '@/lib/authContext';
-import { TenantProvider, useTenant } from '@/lib/tenantContext';
+import { AuthProvider } from '@/lib/authContext';
+import { useAuth } from '@/lib/useAuth';
+import { TenantProvider } from '@/lib/tenantContext';
+import { useTenant } from '@/lib/useTenant';
 import type { ModuleKey } from '@/lib/types';
 import LoginPage from '@/pages/login/LoginPage';
 import DashboardPage from '@/pages/dashboard';
@@ -23,6 +28,7 @@ import ClaimsPage from '@/pages/claims/ClaimsPage';
 import PayrollHome from '@/pages/payroll/PayrollHome';
 import RunDetail from '@/pages/payroll/RunDetail';
 import PayslipPage from '@/pages/payroll/PayslipPage';
+import MyPayslipsPage from '@/pages/payroll/MyPayslipsPage';
 import KpiPage from '@/pages/kpi';
 import ReviewCycle from '@/pages/kpi/ReviewCycle';
 import SalaryInsightsPage from '@/pages/insights/SalaryInsightsPage';
@@ -62,8 +68,9 @@ export interface RouteDef {
  * M1 dashboard · M2 employees · M3 attendance · M4 leave/holidays ·
  * M5 claims · M6 payroll · M7 kpi · M8 insights/reports · M9 settings ·
  * M10 org · Company Setup · Super Admin console.
+ * (Module-private — App.tsx is a component module for fast refresh.)
  */
-export const routeRegistry: RouteDef[] = [
+const routeRegistry: RouteDef[] = [
   { path: '/', title: 'Dashboard', element: <DashboardPage /> },
   { path: '/employees', title: 'Employees', element: <EmployeesPage />, roles: ['Admin', 'HR'] },
   { path: '/employees/:id', title: 'Employee Detail', element: <EmployeeDetailPage /> },
@@ -84,6 +91,9 @@ export const routeRegistry: RouteDef[] = [
   { path: '/payroll', title: 'Payroll', element: <PayrollHome />, roles: ['Admin', 'HR'], module: 'payroll' },
   { path: '/payroll/runs/:id', title: 'Payroll Run', element: <RunDetail />, roles: ['Admin', 'HR'], module: 'payroll' },
   { path: '/payroll/payslip/:id', title: 'Payslip', element: <PayslipPage />, module: 'payroll' },
+  // Employee self-service: own payslips only (page filters by the session's
+  // linked employeeId, finalized runs). Open to every authenticated role.
+  { path: '/my-payslips', title: 'My Payslips', element: <MyPayslipsPage />, module: 'payroll' },
   { path: '/kpi', title: 'KPI & Performance', element: <KpiPage />, roles: ['Admin', 'HR', 'Manager'], module: 'kpi' },
   { path: '/kpi/reviews/:id', title: 'Review Cycle', element: <ReviewCycle />, module: 'kpi' },
   { path: '/insights/salary', title: 'Salary Insights', element: <SalaryInsightsPage />, roles: ['Admin', 'HR'], module: 'insights' },
@@ -177,6 +187,9 @@ function guardElement(r: RouteDef): ReactNode {
 }
 
 export default function App() {
+  // Theme-aware toasts: the app uses its own dark-class strategy (AppLayout
+  // toggles `dark` on <html>); next-themes is not wired up, so follow the class.
+  const dark = useDarkClass();
   return (
     <RoleProvider>
       <TenantProvider>
@@ -206,6 +219,8 @@ export default function App() {
             </Route>
           </Route>
         </Routes>
+        {/* App-wide toast host (sonner) — pages fire via @/lib/toast. */}
+        <Toaster position="top-right" closeButton theme={dark ? 'dark' : 'light'} />
       </AuthProvider>
       </TenantProvider>
     </RoleProvider>

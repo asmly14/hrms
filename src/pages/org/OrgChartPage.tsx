@@ -25,8 +25,9 @@ import {
   CircleAlert, Expand, FileText, GitBranch, ImageDown, LayoutGrid, Maximize,
   Minimize, Pencil, Plus, Printer, Trash2, Users, UserRound,
 } from 'lucide-react';
+import { toast } from 'sonner';
 import { logAudit, useCollection } from '@/lib/db';
-import { useTenant } from '@/lib/tenantContext';
+import { useTenant } from '@/lib/useTenant';
 import { useAuthScope } from '@/pages/leave/useAuthScope';
 import {
   activeEmployees,
@@ -314,6 +315,7 @@ function OrgChartInner() {
         setMoveError(
           `"${posOf.get(target.id)?.title ?? 'That position'}" reports up to "${posOf.get(node.id)?.title ?? 'this position'}" — the move would create a loop.`,
         );
+        toast.error('That move would create a reporting loop.');
         return snapBack();
       }
       setPendingMove({ childId: node.id, parentId: target.id });
@@ -331,6 +333,9 @@ function OrgChartInner() {
       entityId: pendingMove.childId,
       detail: `${posOf.get(pendingMove.childId)?.title} → ${posOf.get(pendingMove.parentId)?.title}`,
     });
+    toast.success(
+      `Reporting line updated: ${posOf.get(pendingMove.childId)?.title} → ${posOf.get(pendingMove.parentId)?.title}`,
+    );
     setPendingMove(null);
   };
 
@@ -370,6 +375,7 @@ function OrgChartInner() {
     });
     profiles.upsert(editing.id, profilePatchOf(values));
     logAudit({ actorName: auth.actor, action: 'org.position.update', entity: 'positions', entityId: editing.id, detail: values.title });
+    toast.success(`Position updated: ${values.title}`);
     setSheetOpen(false);
   };
 
@@ -381,6 +387,7 @@ function OrgChartInner() {
     });
     profiles.upsert(created.id, profilePatchOf(values));
     logAudit({ actorName: auth.actor, action: 'org.position.create', entity: 'positions', entityId: created.id, detail: values.title });
+    toast.success(`Position created: ${values.title}`);
     setAddOpen(false);
   };
 
@@ -397,6 +404,7 @@ function OrgChartInner() {
       actorName: auth.actor, action: 'org.position.delete', entity: 'positions', entityId: pos.id,
       detail: deleteChildren.length > 0 ? `${pos.title} — ${deleteChildren.length} report(s) re-parented` : pos.title,
     });
+    toast.success(`Position deleted: ${pos.title}`);
     setPosDelete(null);
     setSheetOpen(false);
     setSelectedId(null);
@@ -440,6 +448,9 @@ function OrgChartInner() {
       a.download = `${companyName.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}-org-chart.png`;
       a.click();
       logAudit({ actorName: auth.actor, action: 'org.chart.export', entity: 'positions', detail: 'PNG export' });
+      toast.success('Org chart exported as PNG');
+    } catch {
+      toast.error('Org chart export failed — try again.');
     } finally {
       setExporting(false);
     }

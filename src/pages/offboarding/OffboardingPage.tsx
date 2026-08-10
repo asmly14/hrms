@@ -7,7 +7,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { CalendarClock, FileWarning, UserMinus, Users } from 'lucide-react';
 import type { Employee } from '@/lib/types';
 import { useCollection } from '@/lib/db';
-import { useAuth } from '@/lib/authContext';
+import { useAuth } from '@/lib/useAuth';
 import { useOffboardingCases } from '@/lib/lifecycle';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
