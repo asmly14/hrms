@@ -11,7 +11,7 @@
 
 import { getCollection, uid } from './db';
 import { HOLIDAY_DATA, type HolidayDef } from './holidayData';
-import type { Holiday, StateCode } from './types';
+import type { Holiday, StateCode, WorkingWeek } from './types';
 
 export interface StateInfo {
   code: StateCode;
@@ -170,10 +170,16 @@ export function isHoliday(date: string | Date, state: StateCode): Holiday | null
   return getEffectiveHolidays(year, state).find((h) => h.date === iso) ?? null;
 }
 
+/** Weekend test for an explicit pattern — the single source of the
+ *  day-of-week mapping (fri-sat = Fri/Sat, sat-sun = Sat/Sun). */
+export function isWeekendByPattern(date: string | Date, pattern: WorkingWeek): boolean {
+  const day = parseDate(date).getDay();
+  return pattern === 'fri-sat' ? day === 5 || day === 6 : day === 0 || day === 6;
+}
+
 /** Fri–Sat weekend for JHR/KDH/KTN/TRG; Sat–Sun elsewhere (research §1.1). */
 export function isWeekend(date: string | Date, state: StateCode): boolean {
-  const day = parseDate(date).getDay();
-  return stateInfo(state).weekend === 'fri-sat' ? day === 5 || day === 6 : day === 0 || day === 6;
+  return isWeekendByPattern(date, stateInfo(state).weekend);
 }
 
 /** Next date that is neither a weekend day nor a holiday for the state. */

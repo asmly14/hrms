@@ -20,7 +20,7 @@ import {
 import {
   otDayTypeFor, shiftForEmployee, todayISO, useRotations, type AttendanceX, type ShiftX,
 } from './model';
-import { actorName, useAuthSafe } from './useAuthSafe';
+import { actorName, useAuthSafe } from '@/lib/useAuthSafe';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';

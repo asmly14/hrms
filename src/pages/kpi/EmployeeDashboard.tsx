@@ -32,7 +32,7 @@ import {
   type KpiCategory, type KpiExt, type ReviewExt,
 } from './lib';
 import { isFinalReview, objectiveProgress, useObjectives } from '@/lib/kpiEngine';
-import { useAuthSafe } from './useAuthSafe';
+import { useAuthSafe } from '@/lib/useAuthSafe';
 
 interface Props {
   employees: Employee[];

@@ -11,7 +11,7 @@ import TodayBoard from './TodayBoard';
 import TimesheetView from './TimesheetView';
 import OTManager from './OTManager';
 import AnomalyList from './AnomalyList';
-import { isAdminOrHR, useAuthSafe } from './useAuthSafe';
+import { isAdminOrHR, useAuthSafe } from '@/lib/useAuthSafe';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 

@@ -2,9 +2,8 @@
  * Contracts module — Contract OF Service vs Contract FOR Service management.
  *
  * Owned by the Contracts module agent. Pure client-side: localStorage-backed
- * stores that reuse the db.ts pub/sub mechanism via a typed cast (same
- * pattern as lib/lifecycle.ts — db.ts `COLLECTIONS` is core-scaffold owned
- * and cannot be extended by this module).
+ * stores on the first-class registry collections `contracts` and
+ * `contractFeePayments` (P1 registry unification — no typed casts).
  *
  * Malaysian context encoded here:
  *  - Contract OF service  → employer–employee relationship. Employment Act
@@ -15,7 +14,7 @@
  *    UI copy flags the LHDN CP500 instalment scheme and the 2% withholding
  *    under s.109B ITA 1967 that may apply to certain resident payees.
  */
-import { getCollection, logAudit, setCollection, uid, useCollection, type CollectionName } from './db';
+import { getCollection, logAudit, setCollection, uid, useCollection } from './db';
 import { round2 } from './utils';
 
 /* ────────────────────────────────────────────────────────────
@@ -430,13 +429,11 @@ export function feePaymentTotals(payments: FeePayment[]): FeeTotals {
 }
 
 /* ────────────────────────────────────────────────────────────
- * Reactive stores — reuse db.ts pub/sub on module-owned keys.
+ * Reactive stores — first-class registry collections (db.ts).
  * ──────────────────────────────────────────────────────────── */
 
-const asCollection = (name: string) => name as CollectionName;
-
-export const CONTRACTS_COLLECTION = asCollection('contracts');
-export const FEE_PAYMENTS_COLLECTION = asCollection('contractFeePayments');
+export const CONTRACTS_COLLECTION = 'contracts';
+export const FEE_PAYMENTS_COLLECTION = 'contractFeePayments';
 
 export function useContracts() {
   return useCollection<EmploymentContract>(CONTRACTS_COLLECTION);

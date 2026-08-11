@@ -14,10 +14,10 @@
  *                branding read-only, and submits a wizard form. No session,
  *                no active-tenant dependency.
  *
- * Storage note: db.ts `COLLECTIONS` is core-scaffold owned and cannot be
- * extended by this module, so the three collections below register their
- * keys via a typed cast — same `myhrms:t:<companyId>:` prefix, same pub/sub
- * semantics (identical pattern to lib/lifecycle.ts).
+ * Storage note: the three collections below are first-class members of the
+ * db.ts `COLLECTIONS` registry (P1 unification) — same
+ * `myhrms:t:<companyId>:` prefix, standard `useCollection` pub/sub, no typed
+ * casts, full export/import coverage:
  *
  *   onboardLinks        → OnboardLink[]        (per company)
  *   onboardSubmissions  → OnboardSubmission[]  (per company)
@@ -26,9 +26,12 @@
  * `onboardingExtras` is the typed records-extension contract for the
  * employee-records module: academics, emergency contacts, address/nationality
  * and a document manifest hang off the employee WITHOUT touching the core
- * Employee type. Document bytes (base64 dataUrl) live ONLY on the submission
- * record — the extras manifest points back via submissionId so the records
- * module can hydrate previews without double-storing megabytes.
+ * Employee type. Document bytes live in the per-tenant docStore
+ * (lib/docStore.ts, collection `docBytes`) — submission records and the
+ * extras manifest carry metadata + a `docId` only, so operational
+ * collections stay kilobyte-sized. Legacy submissions with inline base64
+ * `dataUrl`s migrate into the docStore on first byte access via
+ * `getOnboardDocumentDataUrl` (transparent, idempotent).
  */
 import {
   getCollection,
@@ -39,9 +42,9 @@ import {
   nextEmployeeNo,
   uid,
   useCollection,
-  type CollectionName,
 } from './db';
 import { buildOnboardingChecklist, type OnboardingChecklist } from './lifecycle';
+import { getDoc, putDoc } from './docStore';
 import type {
   Company,
   Employee,
@@ -127,7 +130,13 @@ export type OnboardDocKind =
 export interface OnboardDocument {
   kind: OnboardDocKind;
   fileName: string;
-  /** base64 data URL — present on the submission record only (see header). */
+  /** Reference into the per-tenant docStore (lib/docStore.ts) — the canonical
+   *  home of the bytes. New uploads always carry this. */
+  docId?: string;
+  /** LEGACY inline base64 payload. Pre-docStore submissions still have the
+   *  bytes here; they migrate into the docStore on first byte access
+   *  (`getOnboardDocumentDataUrl`), which then drops this field. Never
+   *  populated on newly stored records. */
   dataUrl?: string;
   sizeBytes: number;
   uploadedAt: string; // ISO datetime
@@ -178,8 +187,8 @@ export interface OnboardingExtras {
   nationality: string;
   emergencyContacts: EmergencyContact[];
   academics: AcademicEntry[];
-  /** Manifest only — no dataUrl here (bytes stay on the submission). */
-  documents: Array<Pick<OnboardDocument, 'kind' | 'fileName' | 'sizeBytes' | 'uploadedAt'>>;
+  /** Manifest only — no bytes here; hydrate via docId (or the submission). */
+  documents: Array<Pick<OnboardDocument, 'kind' | 'fileName' | 'sizeBytes' | 'uploadedAt' | 'docId'>>;
   declarationAccepted: boolean;
   attachedAt: string; // ISO datetime
 }
@@ -302,10 +311,8 @@ export function validateDocumentFile(fileName: string, sizeBytes: number): strin
 }
 
 /* ────────────────────────────────────────────────────────────
- * Collection plumbing (typed-cast, tenant-scoped)
+ * Collection plumbing (registry collections, tenant-scoped)
  * ──────────────────────────────────────────────────────────── */
-
-const asCollection = (name: string) => name as CollectionName;
 
 function updateLinkRecord(
   companyId: string,
@@ -313,7 +320,7 @@ function updateLinkRecord(
   patch: Partial<OnboardLink>,
 ): OnboardLink | undefined {
   const next = getOnboardLinks(companyId).map((l) => (l.id === id ? { ...l, ...patch } : l));
-  setCollection(asCollection(ONBOARD_LINKS_KEY), next, companyId);
+  setCollection(ONBOARD_LINKS_KEY, next, companyId);
   return next.find((l) => l.id === id);
 }
 
@@ -323,7 +330,7 @@ function updateSubmissionRecord(
   patch: Partial<OnboardSubmission>,
 ): void {
   setCollection(
-    asCollection(ONBOARD_SUBMISSIONS_KEY),
+    ONBOARD_SUBMISSIONS_KEY,
     getSubmissions(companyId).map((s) => (s.id === id ? { ...s, ...patch } : s)),
     companyId,
   );
@@ -334,11 +341,11 @@ function updateSubmissionRecord(
  * ──────────────────────────────────────────────────────────── */
 
 export function getOnboardLinks(tenantId?: string): OnboardLink[] {
-  return getCollection<OnboardLink>(asCollection(ONBOARD_LINKS_KEY), tenantId);
+  return getCollection<OnboardLink>(ONBOARD_LINKS_KEY, tenantId);
 }
 
 export function useOnboardLinks() {
-  return useCollection<OnboardLink>(asCollection(ONBOARD_LINKS_KEY));
+  return useCollection<OnboardLink>(ONBOARD_LINKS_KEY);
 }
 
 export interface CreateOnboardLinkInput {
@@ -370,7 +377,7 @@ export function createOnboardLink(input: CreateOnboardLinkInput): OnboardLink {
     status: 'active',
   };
   setCollection(
-    asCollection(ONBOARD_LINKS_KEY),
+    ONBOARD_LINKS_KEY,
     [...getOnboardLinks(input.companyId), link],
     input.companyId,
   );
@@ -407,7 +414,7 @@ export function sweepExpiredLinks(tenantId?: string, now: Date = new Date()): vo
   if (!all.some((l) => l.status === 'active' && isLinkExpired(l, now))) return;
   const co = all[0]?.companyId ?? tenantId;
   setCollection(
-    asCollection(ONBOARD_LINKS_KEY),
+    ONBOARD_LINKS_KEY,
     all.map((l) => (l.status === 'active' && isLinkExpired(l, now) ? { ...l, status: 'expired' as const } : l)),
     co,
   );
@@ -474,11 +481,11 @@ export function resolvePublicLink(token: string, now: Date = new Date()): Resolv
  * ──────────────────────────────────────────────────────────── */
 
 export function getSubmissions(tenantId?: string): OnboardSubmission[] {
-  return getCollection<OnboardSubmission>(asCollection(ONBOARD_SUBMISSIONS_KEY), tenantId);
+  return getCollection<OnboardSubmission>(ONBOARD_SUBMISSIONS_KEY, tenantId);
 }
 
 export function useOnboardSubmissions() {
-  return useCollection<OnboardSubmission>(asCollection(ONBOARD_SUBMISSIONS_KEY));
+  return useCollection<OnboardSubmission>(ONBOARD_SUBMISSIONS_KEY);
 }
 
 export function getSubmission(id: string, tenantId?: string): OnboardSubmission | undefined {
@@ -503,6 +510,85 @@ export function markSubmitted(link: OnboardLink, submissionId: string): void {
   updateLinkRecord(link.companyId, link.id, { status: 'submitted', submissionId });
 }
 
+/* ────────────────────────────────────────────────────────────
+ * Document bytes — lazy docStore reads + legacy inline migration
+ * ──────────────────────────────────────────────────────────── */
+
+/** Identity key for an OnboardDocument (the type has no id field). */
+function onboardDocKey(doc: OnboardDocument): string {
+  return `${doc.kind}|${doc.fileName}|${doc.uploadedAt}|${doc.sizeBytes}`;
+}
+
+/** In-flight legacy migrations, keyed by submission + document identity. */
+const onboardDocMigrations = new Map<string, Promise<void>>();
+
+/**
+ * Resolve a submission document's bytes as a dataUrl, lazily (UI previews /
+ * downloads call this and render a spinner until it settles).
+ *
+ * Canonical path: the record carries a `docId` and the bytes come from the
+ * per-tenant docStore. LEGACY path: pre-docStore records still inline the
+ * base64 `dataUrl` — the bytes are migrated into the docStore on this first
+ * access and the stored record is rewritten to metadata + docId. Transparent
+ * (callers always get the dataUrl back) and idempotent (the rewrite only
+ * fires while an inline dataUrl is still present; concurrent reads share one
+ * in-flight migration). If migration cannot persist (tenant doc budget full)
+ * the inline bytes are left untouched — no regression vs. the old behavior.
+ */
+export async function getOnboardDocumentDataUrl(
+  companyId: string,
+  submissionId: string,
+  doc: OnboardDocument,
+): Promise<string | undefined> {
+  if (doc.docId) {
+    const fromStore = await getDoc(doc.docId, companyId).catch(() => undefined);
+    if (fromStore) return fromStore;
+    if (!doc.dataUrl) return undefined; // dangling docId — nothing to fall back to
+  }
+  if (!doc.dataUrl) return undefined;
+
+  const dataUrl = doc.dataUrl;
+  const migKey = `${companyId}|${submissionId}|${onboardDocKey(doc)}`;
+  const inflight = onboardDocMigrations.get(migKey);
+  if (inflight) {
+    await inflight.catch(() => undefined);
+    return dataUrl;
+  }
+
+  const migration = (async () => {
+    const docId = await putDoc(
+      { bytes: dataUrl, sizeBytes: doc.sizeBytes, fileName: doc.fileName },
+      companyId,
+    );
+    const target = getSubmissions(companyId).find((s) => s.id === submissionId);
+    if (!target) return;
+    let changed = false;
+    const documents = target.documents.map((d) => {
+      if (!changed && d.dataUrl && !d.docId && onboardDocKey(d) === onboardDocKey(doc)) {
+        changed = true;
+        return {
+          kind: d.kind,
+          fileName: d.fileName,
+          sizeBytes: d.sizeBytes,
+          uploadedAt: d.uploadedAt,
+          docId,
+        } satisfies OnboardDocument;
+      }
+      return d;
+    });
+    if (changed) updateSubmissionRecord(companyId, submissionId, { documents });
+  })();
+  onboardDocMigrations.set(migKey, migration);
+  try {
+    await migration;
+  } catch {
+    // Budget full / storage hiccup — bytes stay inline; retry on next access.
+  } finally {
+    onboardDocMigrations.delete(migKey);
+  }
+  return dataUrl;
+}
+
 /** What the applicant posts — everything except server-assigned fields. */
 export type OnboardDraft = Omit<
   OnboardSubmission,
@@ -515,8 +601,11 @@ export type SubmitResult =
 
 /**
  * Persist an applicant submission and flip the link to 'submitted'.
- * Quota failures (document dataUrls vs the ~5 MB localStorage budget) surface
- * as a friendly error instead of a thrown exception.
+ * Documents normally arrive as metadata + docId (the wizard putDocs bytes at
+ * pick time, where DocQuotaError surfaces with usage info); a draft that
+ * still inlines dataUrls is stored as-is for back-compat and migrated to the
+ * docStore on first byte access. Any residual storage failure surfaces as a
+ * friendly error instead of a thrown exception.
  */
 export function submitOnboardForm(link: OnboardLink, draft: OnboardDraft): SubmitResult {
   const submission: OnboardSubmission = {
@@ -529,7 +618,7 @@ export function submitOnboardForm(link: OnboardLink, draft: OnboardDraft): Submi
   };
   try {
     setCollection(
-      asCollection(ONBOARD_SUBMISSIONS_KEY),
+      ONBOARD_SUBMISSIONS_KEY,
       [...getSubmissions(link.companyId), submission],
       link.companyId,
     );
@@ -559,7 +648,7 @@ export function submitOnboardForm(link: OnboardLink, draft: OnboardDraft): Submi
  * ──────────────────────────────────────────────────────────── */
 
 export function getOnboardingExtras(employeeId: string, tenantId?: string): OnboardingExtras | undefined {
-  return getCollection<OnboardingExtras>(asCollection(ONBOARDING_EXTRAS_KEY), tenantId).find(
+  return getCollection<OnboardingExtras>(ONBOARDING_EXTRAS_KEY, tenantId).find(
     (x) => x.employeeId === employeeId,
   );
 }
@@ -567,7 +656,8 @@ export function getOnboardingExtras(employeeId: string, tenantId?: string): Onbo
 /**
  * Attach everything the portal collected that the core Employee type cannot
  * hold, keyed by employeeId, for the employee-records module to render.
- * Document bytes are NOT copied — the manifest points back to the submission.
+ * Document bytes are NOT copied — the manifest carries each doc's docId into
+ * the shared docStore (legacy inline submissions point back via submissionId).
  */
 export function attachOnboardingExtras(
   employeeId: string,
@@ -585,19 +675,20 @@ export function attachOnboardingExtras(
     nationality: submission.personal.nationality,
     emergencyContacts: submission.emergencyContacts,
     academics: submission.academics,
-    documents: submission.documents.map(({ kind, fileName, sizeBytes, uploadedAt }) => ({
+    documents: submission.documents.map(({ kind, fileName, sizeBytes, uploadedAt, docId }) => ({
       kind,
       fileName,
       sizeBytes,
       uploadedAt,
+      docId,
     })),
     declarationAccepted: submission.declarationAccepted,
     attachedAt: new Date().toISOString(),
   };
-  const rest = getCollection<OnboardingExtras>(asCollection(ONBOARDING_EXTRAS_KEY), co).filter(
+  const rest = getCollection<OnboardingExtras>(ONBOARDING_EXTRAS_KEY, co).filter(
     (x) => x.employeeId !== employeeId,
   );
-  setCollection(asCollection(ONBOARDING_EXTRAS_KEY), [...rest, extras], co);
+  setCollection(ONBOARDING_EXTRAS_KEY, [...rest, extras], co);
   return extras;
 }
 
@@ -660,7 +751,7 @@ export function buildEmployeeFromSubmission(
 }
 
 /** Create the lifecycle onboarding checklist for a freshly approved hire.
- *  Writes the same typed-cast key useOnboardingChecklists() reads. */
+ *  Writes the same registry collection useOnboardingChecklists() reads. */
 export function createChecklistForEmployee(
   employeeId: string,
   joinDate: string,
@@ -669,7 +760,7 @@ export function createChecklistForEmployee(
 ): void {
   const templateKey = employmentType === 'contract' ? 'contract' : 'standard';
   const payload = buildOnboardingChecklist(employeeId, templateKey, joinDate);
-  const key = asCollection('onboardingChecklists');
+  const key = 'onboardingChecklists';
   const record: OnboardingChecklist = { ...payload, id: uid() };
   setCollection(key, [...getCollection<OnboardingChecklist>(key, tenantId), record], tenantId);
 }

@@ -28,7 +28,7 @@ import Outcomes from './Outcomes';
 import Pips from './Pips';
 import { bandFor100, empPeriodKey, score100to5, type KpiExt, type ReviewExt } from './lib';
 import { computePendingActions, isFinalReview, usePips } from '@/lib/kpiEngine';
-import { useAuthSafe } from './useAuthSafe';
+import { useAuthSafe } from '@/lib/useAuthSafe';
 
 export default function KpiPage() {
   const { items: employees } = useCollection<Employee>('employees');

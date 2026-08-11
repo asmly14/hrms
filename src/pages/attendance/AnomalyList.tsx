@@ -16,7 +16,7 @@ import {
   hhmmToMin, isScheduledWorkDay, nowHHmm, shiftEndMin, shiftForEmployee, todayISO,
   useRotations, workedHours, type AttendanceX, type ShiftX,
 } from './model';
-import { actorName, useAuthSafe } from './useAuthSafe';
+import { actorName, useAuthSafe } from '@/lib/useAuthSafe';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';

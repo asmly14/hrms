@@ -1,20 +1,34 @@
 /**
- * Documents repository tab — uploads (≤700 KB dataUrl), image previews,
- * expiry tracking (Passport / Work Permit / Medical: amber ≤ 90 days, red
- * expired), kind filter, download and removal.
+ * Documents repository tab — uploads (≤700 KB; bytes land in the per-tenant
+ * docStore, the record keeps metadata + docId), lazy image previews and
+ * downloads (spinner while bytes load), expiry tracking (Passport / Work
+ * Permit / Medical: amber ≤ 90 days, red expired), kind filter, a tenant
+ * "storage used" indicator, and removal (which also frees the docStore bytes).
  */
-import { useRef, useState } from 'react';
-import { AlertTriangle, Download, FileText, FolderOpen, Plus, Upload } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import {
+  AlertTriangle,
+  Download,
+  FileText,
+  FolderOpen,
+  HardDrive,
+  Loader2,
+  Plus,
+  Upload,
+} from 'lucide-react';
 import {
   DOCUMENT_KINDS,
   MAX_DOCUMENT_BYTES,
   documentExpiryStatus,
   fmtFileSize,
+  getRecordDocumentDataUrl,
   removeDocument,
   saveDocument,
   type DocumentKind,
   type RecordDocument,
 } from '@/lib/employeeRecords';
+import { DocQuotaError, putDoc, useDocUsage } from '@/lib/docStore';
+import { toastError } from '@/lib/toast';
 import { cn, fmtDate } from '@/lib/utils';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
@@ -28,6 +42,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
+import { Progress } from '@/components/ui/progress';
 import {
   Select,
   SelectContent,
@@ -73,6 +88,114 @@ function ExpiryBadge({ doc }: { doc: RecordDocument }) {
   );
 }
 
+/**
+ * Lazily resolve a document's bytes (docStore by docId; legacy inline dataUrl
+ * migrates on this first read). Legacy inline bytes seed the initial state so
+ * they render instantly while the migration runs in the background.
+ */
+function useRecordDocUrl(employeeId: string, doc: RecordDocument) {
+  const [url, setUrl] = useState<string | undefined>(doc.dataUrl);
+  const [loading, setLoading] = useState(!doc.dataUrl && !!doc.docId);
+  useEffect(() => {
+    let live = true;
+    getRecordDocumentDataUrl(employeeId, doc)
+      .then((u) => {
+        if (live) {
+          setUrl(u);
+          setLoading(false);
+        }
+      })
+      .catch(() => {
+        if (live) setLoading(false);
+      });
+    return () => {
+      live = false;
+    };
+  }, [employeeId, doc]);
+  return { url, loading };
+}
+
+function DocumentRow({
+  employeeId,
+  doc: d,
+  readOnly,
+  actorName,
+}: {
+  employeeId: string;
+  doc: RecordDocument;
+  readOnly: boolean;
+  actorName: string;
+}) {
+  const { url, loading } = useRecordDocUrl(employeeId, d);
+  const isImage = url?.startsWith('data:image/');
+  const hasBytes = !!(d.docId || d.dataUrl);
+
+  const download = async () => {
+    const target = url ?? (await getRecordDocumentDataUrl(employeeId, d).catch(() => undefined));
+    if (!target) {
+      toastError('Could not load document', 'The stored bytes are unavailable.');
+      return;
+    }
+    const a = document.createElement('a');
+    a.href = target;
+    a.download = d.fileName;
+    a.click();
+  };
+
+  return (
+    <li className="flex items-center gap-3 py-3">
+      {loading ? (
+        <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg bg-stone-100 text-stone-400">
+          <Loader2 className="h-4 w-4 animate-spin" aria-label="Loading document" />
+        </div>
+      ) : isImage ? (
+        <img
+          src={url}
+          alt={d.fileName}
+          className="h-12 w-12 shrink-0 rounded-lg border border-border object-cover"
+        />
+      ) : (
+        <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg bg-stone-100 text-stone-500">
+          <FileText className="h-5 w-5" />
+        </div>
+      )}
+      <div className="min-w-0 flex-1">
+        <p className="flex flex-wrap items-center gap-2 text-sm font-medium">
+          <span className="truncate">{d.fileName}</span>
+          <Badge variant="outline" className={cn('border-transparent', KIND_BADGE[d.kind])}>
+            {d.kind}
+          </Badge>
+          <ExpiryBadge doc={d} />
+        </p>
+        <p className="text-xs text-muted-foreground">
+          {fmtFileSize(d.sizeBytes)} · uploaded {fmtDate(d.uploadedAt)}
+          {d.issueDate ? ` · issued ${fmtDate(d.issueDate)}` : ''}
+          {d.expiryDate ? ` · expires ${fmtDate(d.expiryDate)}` : ''}
+        </p>
+      </div>
+      <div className="flex shrink-0 items-center">
+        {hasBytes && (
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8 text-muted-foreground"
+            onClick={() => void download()}
+            aria-label={`Download ${d.fileName}`}
+          >
+            <Download className="h-4 w-4" />
+          </Button>
+        )}
+        {!readOnly && (
+          <RemoveButton
+            label={d.fileName}
+            onConfirm={() => removeDocument(employeeId, d.id, d.fileName, actorName)}
+          />
+        )}
+      </div>
+    </li>
+  );
+}
+
 export default function DocumentsTab({ employee, file, readOnly, actorName }: TabProps) {
   const [open, setOpen] = useState(false);
   const [kindFilter, setKindFilter] = useState<'all' | DocumentKind>('all');
@@ -81,7 +204,9 @@ export default function DocumentsTab({ employee, file, readOnly, actorName }: Ta
   const [expiryDate, setExpiryDate] = useState('');
   const [picked, setPicked] = useState<{ fileName: string; dataUrl: string; sizeBytes: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
+  const usage = useDocUsage();
 
   const documents = [...(file?.documents ?? [])].sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt));
   const visible = kindFilter === 'all' ? documents : documents.filter((d) => d.kind === kindFilter);
@@ -112,15 +237,22 @@ export default function DocumentsTab({ employee, file, readOnly, actorName }: Ta
     reader.readAsDataURL(f);
   };
 
-  const submit = () => {
+  const submit = async () => {
     if (!picked) return;
+    setSaving(true);
     try {
+      // Bytes → docStore (quota guards live here); the record keeps metadata only.
+      const docId = await putDoc({
+        bytes: picked.dataUrl,
+        sizeBytes: picked.sizeBytes,
+        fileName: picked.fileName,
+      });
       saveDocument(
         employee.id,
         {
           kind,
           fileName: picked.fileName,
-          dataUrl: picked.dataUrl,
+          docId,
           sizeBytes: picked.sizeBytes,
           issueDate: issueDate || undefined,
           expiryDate: expiryDate || undefined,
@@ -130,7 +262,12 @@ export default function DocumentsTab({ employee, file, readOnly, actorName }: Ta
       setOpen(false);
       resetDialog();
     } catch (err) {
+      if (err instanceof DocQuotaError) {
+        toastError(err.kind === 'per-doc' ? 'File too large' : 'Document storage is full', err);
+      }
       setError(err instanceof Error ? err.message : 'Upload failed.');
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -164,6 +301,22 @@ export default function DocumentsTab({ employee, file, readOnly, actorName }: Ta
         )
       }
     >
+      {/* Tenant document-storage usage */}
+      <div className="mb-4 flex items-center gap-2.5 rounded-lg border border-border/60 bg-stone-50 px-3 py-2 text-xs text-muted-foreground dark:bg-stone-900/40">
+        <HardDrive className="h-3.5 w-3.5 shrink-0" />
+        <Progress
+          value={usage.percent}
+          className={cn(
+            'h-1.5 w-28 bg-stone-200 dark:bg-stone-800 [&>div]:bg-amber-600',
+            usage.percent >= 80 && '[&>div]:bg-red-500',
+          )}
+        />
+        <span>
+          Document storage: {fmtFileSize(usage.bytes)} of {fmtFileSize(usage.limitBytes)} used ·{' '}
+          {usage.count} file{usage.count === 1 ? '' : 's'}
+        </span>
+      </div>
+
       {/* Kind filter */}
       <div className="mb-4 flex flex-wrap gap-1.5">
         {(['all', ...DOCUMENT_KINDS] as const).map((k) => (
@@ -190,53 +343,15 @@ export default function DocumentsTab({ employee, file, readOnly, actorName }: Ta
         </p>
       ) : (
         <ul className="divide-y divide-border/60">
-          {visible.map((d) => {
-            const isImage = d.dataUrl?.startsWith('data:image/');
-            return (
-              <li key={d.id} className="flex items-center gap-3 py-3">
-                {isImage ? (
-                  <img
-                    src={d.dataUrl}
-                    alt={d.fileName}
-                    className="h-12 w-12 shrink-0 rounded-lg border border-border object-cover"
-                  />
-                ) : (
-                  <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg bg-stone-100 text-stone-500">
-                    <FileText className="h-5 w-5" />
-                  </div>
-                )}
-                <div className="min-w-0 flex-1">
-                  <p className="flex flex-wrap items-center gap-2 text-sm font-medium">
-                    <span className="truncate">{d.fileName}</span>
-                    <Badge variant="outline" className={cn('border-transparent', KIND_BADGE[d.kind])}>
-                      {d.kind}
-                    </Badge>
-                    <ExpiryBadge doc={d} />
-                  </p>
-                  <p className="text-xs text-muted-foreground">
-                    {fmtFileSize(d.sizeBytes)} · uploaded {fmtDate(d.uploadedAt)}
-                    {d.issueDate ? ` · issued ${fmtDate(d.issueDate)}` : ''}
-                    {d.expiryDate ? ` · expires ${fmtDate(d.expiryDate)}` : ''}
-                  </p>
-                </div>
-                <div className="flex shrink-0 items-center">
-                  {d.dataUrl && (
-                    <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground" asChild>
-                      <a href={d.dataUrl} download={d.fileName} aria-label={`Download ${d.fileName}`}>
-                        <Download className="h-4 w-4" />
-                      </a>
-                    </Button>
-                  )}
-                  {!readOnly && (
-                    <RemoveButton
-                      label={d.fileName}
-                      onConfirm={() => removeDocument(employee.id, d.id, d.fileName, actorName)}
-                    />
-                  )}
-                </div>
-              </li>
-            );
-          })}
+          {visible.map((d) => (
+            <DocumentRow
+              key={d.id}
+              employeeId={employee.id}
+              doc={d}
+              readOnly={readOnly}
+              actorName={actorName}
+            />
+          ))}
         </ul>
       )}
 
@@ -314,10 +429,16 @@ export default function DocumentsTab({ employee, file, readOnly, actorName }: Ta
             </Button>
             <Button
               className="bg-amber-600 text-white hover:bg-amber-700"
-              disabled={!picked}
-              onClick={submit}
+              disabled={!picked || saving}
+              onClick={() => void submit()}
             >
-              Upload
+              {saving ? (
+                <>
+                  <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> Storing…
+                </>
+              ) : (
+                'Upload'
+              )}
             </Button>
           </DialogFooter>
         </DialogContent>

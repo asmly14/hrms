@@ -67,7 +67,8 @@ import {
   buildPayrollRegisterReport,
   type BuiltReport,
 } from './reportBuilders';
-import { downloadCsv, reportCsv } from './csv';
+import { downloadCsv } from '@/lib/csv';
+import { reportCsv } from './csv';
 import ReportPreview from './ReportPreview';
 
 /**

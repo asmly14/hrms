@@ -32,6 +32,67 @@ When no tenant has ever been selected, the active tenant defaults to
 `'co-asm'` (exported as `DEFAULT_COMPANY_ID`) — tests and scripts keep
 working with zero setup.
 
+### 1a. Collection registry (`COLLECTIONS` in `lib/db.ts`)
+
+`COLLECTIONS` / `CollectionName` are the **single source of truth** for every
+persisted collection. JSON export/import (`exportTenantData` /
+`importTenantData`), legacy migration, per-tenant seed init and storage
+accounting all iterate the registry — a collection that is not registered is
+silently dropped by all of them. Since the P1 registry unification, the
+former typed-cast module stores are first-class members and use
+`useCollection` directly (no private pub/sub, no casts):
+
+| Collection | Contents | Owner module |
+|---|---|---|
+| `departments` | Department[] | core scaffold |
+| `positions` | Position[] | core scaffold |
+| `employees` | Employee[] | core scaffold |
+| `shifts` | Shift[] | core scaffold |
+| `attendance` | AttendanceRecord[] | core scaffold |
+| `leaves` | LeaveRequest[] | core scaffold |
+| `leaveBalances` | LeaveBalance[] | core scaffold |
+| `claims` | Claim[] | core scaffold |
+| `payrollRuns` | PayrollRun[] | core scaffold |
+| `payslips` | Payslip[] | core scaffold |
+| `kpis` | KPI[] | core scaffold |
+| `reviews` | KPIReview[] | core scaffold |
+| `holidays` | Holiday[] — **global** (law is national) | core scaffold |
+| `settings` | Settings / extension docs | core scaffold |
+| `audit` | AuditLog[] — capped at newest 2,000 per tenant (`MAX_AUDIT_ENTRIES`) | core scaffold |
+| `onboardingChecklists` | OnboardingChecklist[] | `lib/lifecycle.ts` |
+| `offboardingCases` | OffboardingCase[] | `lib/lifecycle.ts` |
+| `positionProfiles` | PositionProfile[] (keyed by positionId) | `lib/orgChart.ts` |
+| `departmentProfiles` | DepartmentProfile[] (keyed by departmentId) | `lib/orgChart.ts` |
+| `contracts` | EmploymentContract[] | `lib/contracts.ts` |
+| `contractFeePayments` | FeePayment[] | `lib/contracts.ts` |
+| `employeeRecords` | EmployeeRecordFile[] (per-employee personnel file) | `lib/employeeRecords.ts` |
+| `onboardLinks` | OnboardLink[] (token-gated invite links) | `lib/onboardLinks.ts` |
+| `onboardSubmissions` | OnboardSubmission[] | `lib/onboardLinks.ts` |
+| `onboardingExtras` | OnboardingExtras[] (keyed by employeeId) | `lib/onboardLinks.ts` |
+| `cycles` | KpiCycle[] (review-cycle stage machine) | `lib/kpiEngine.ts` |
+| `objectives` | Objective[] (OKRs + goal cascade) | `lib/kpiEngine.ts` |
+| `checkins` | CheckIn[] (1:1 notes per review) | `lib/kpiEngine.ts` |
+| `pips` | Pip[] (performance improvement plans) | `lib/kpiEngine.ts` |
+| `attendance:rotations` | RotationPlan[] — physical sub-key `myhrms:t:<companyId>:attendance:rotations` | `pages/attendance/model.ts` |
+
+Notes:
+
+- `attendance:rotations` is a registry member so export/import, legacy
+  migration and per-tenant seed init cover it, but its store module
+  (`pages/attendance/model.ts`, outside the registry scope) still owns a
+  private pub/sub + its own legacy-key migration (idempotent, tenant-wins —
+  compatible with the db.ts migration). Registry-driven writes (e.g. an
+  import) do not live-refresh already-mounted attendance screens; they
+  re-read on next mount. Fold it into `useCollection` when that module's
+  owner picks up the follow-up.
+- `pages/claims/actingAsStorage.ts` keeps a page-local UI pointer under
+  `myhrms:t:<companyId>:claims:actingAs`. It is a session-scoped selection,
+  not a document collection, and is intentionally NOT in the registry.
+- The seed dataset (`lib/seed.ts`) only generates the 15 core collections;
+  module collections start empty and are produced by user activity. Reseeding
+  a tenant rewrites the seeded core collections and leaves module collections
+  untouched.
+
 ## 2. `lib/tenantContext.tsx` — React tenant state
 
 `TenantProvider` is wired in `App.tsx` around `AuthProvider`.
@@ -66,9 +127,42 @@ upsertCompany(company): Company    // insert-or-update by id
 getActiveCompany(): Company | undefined
 nextEmployeeNo(companyId): string  // e.g. 'ASM0031' — applies
                                    // config.numberFormats.employeeIdPrefix
-seedTenantIfEmpty(companyId, force?)  // per-tenant seeding (idempotent)
-seedIfEmpty(force?)                   // seeds ALL demo tenants
+seedTenantIfEmpty(companyId, force?): Promise<void>  // per-tenant seeding (idempotent);
+                                                     // await — resolves after writes land
+seedIfEmpty(force?): Promise<void>                   // seeds ALL demo tenants (awaited)
+dbReady(): Promise<void>                   // resolves once the module-init auto-seed has
+                                           // landed (immediately when already seeded)
+exportTenantData(tenantId?): Record<CollectionName, unknown[]>
+                                           // snapshot EVERY registry collection
+importTenantData(data, tenantId?, mode): ImportReport
+                                           // merge (by id) | replace; unknown keys
+                                           // skipped & reported
+MAX_AUDIT_ENTRIES = 2000                   // per-tenant audit cap — logAudit trims
+                                           // oldest entries on append
 ```
+
+Seeding is **awaitable** (P1 seed-race fix): `seedTenantIfEmpty` /
+`seedIfEmpty` dynamically import `lib/seed.ts` and return a promise that
+resolves only after the import and all collection writes have landed. The
+module-bottom auto-seed still fires on import when storage is available;
+`dbReady()` is the ready handle for non-React callers that must not read
+before initialization (reactive pages converge on their own — seed writes
+notify subscribers).
+
+**Export/import & the enterprise migrator.** "Export all data" (Settings →
+Data management) serializes **every** registry collection via
+`exportTenantData`, and the web import restores any of them via
+`importTenantData` (unknown keys are skipped with a report). The Postgres
+migrator (`server/scripts/migrate-from-browser.ts`, registry in
+`server/src/db/collections.ts`) currently maps 20 collections — the 15 core
+ones plus `cycles`, `objectives`, `checkins`, `pips`, `positionProfiles`,
+`departmentProfiles`, with `audit` handled specially. The remaining 9
+(`onboardingChecklists`, `offboardingCases`, `contracts`,
+`contractFeePayments`, `employeeRecords`, `onboardLinks`,
+`onboardSubmissions`, `onboardingExtras`, `attendance:rotations`) now appear
+in export files and are skipped with a console warning until the server
+registry + SQL schema are extended — that follow-up lives in the server
+scope, not the web registry.
 
 `Company` / `CompanyConfig` shape (`lib/types.ts`):
 
@@ -155,4 +249,7 @@ collisions are namespaced with the company code (`name.mrd`).
 pre-multitenant keys `myhrms:<collection>` are moved under
 `myhrms:t:co-asm:<collection>`, the `co-asm` Company record is ensured, and
 `myhrms:migrated:v2` is written. Idempotent — tenant data always wins over
-leftover legacy keys; re-runs are no-ops.
+leftover legacy keys; re-runs are no-ops. The loop iterates the full
+registry (§1a), so the legacy global rotations key
+(`myhrms:attendance:rotations`) is covered too — alongside the attendance
+module's own idempotent migration in `pages/attendance/model.ts`.

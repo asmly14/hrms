@@ -9,7 +9,3 @@
 export { default as OrgPage } from './OrgPage';
 export { default as OrgChartPage } from './OrgChartPage';
 
-export const routes = [
-  { path: '/org', title: 'Organization' },
-  { path: '/org/chart', title: 'Org Chart' },
-];

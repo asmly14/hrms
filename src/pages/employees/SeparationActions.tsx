@@ -32,11 +32,14 @@ import {
 import { fmtDate, fmtRM } from '@/lib/utils';
 import {
   OTHER_SEPARATION_REASON_LABELS,
+  addCascadeCounts,
   bulkDelete,
   bulkSeparate,
   computeVssAmount,
   deleteBlockReason,
+  emptyCascadeCounts,
   suggestedLastWorkingDay,
+  summarizeCascadeCounts,
   type BulkDeleteResult,
   type BulkItemResult,
   type BulkSeparationResult,
@@ -107,6 +110,13 @@ function ResultSummary({
   result: BulkSeparationResult | BulkDeleteResult;
   verb: string;
 }) {
+  // Permanent deletes attach per-employee cascade counts — aggregate them
+  // into one counts line (absent for separations).
+  const cascades = result.succeeded.map((s) => s.cascade).filter((c) => c !== undefined);
+  const totals =
+    cascades.length > 0
+      ? cascades.reduce((acc, c) => addCascadeCounts(acc, c), emptyCascadeCounts())
+      : null;
   return (
     <div className="space-y-3 py-2">
       <p className="text-sm">
@@ -124,6 +134,11 @@ function ResultSummary({
             <p key={s.employeeId}>✓ {s.name}</p>
           ))}
         </div>
+      )}
+      {totals && (
+        <p className="rounded-lg bg-stone-50 px-3 py-2 text-xs text-muted-foreground">
+          Linked data: {summarizeCascadeCounts(totals)}
+        </p>
       )}
       {result.skipped.length > 0 && (
         <div className="max-h-32 space-y-1 overflow-y-auto rounded-lg border border-amber-200 bg-amber-50/60 p-2.5 text-xs">

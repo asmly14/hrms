@@ -12,7 +12,7 @@ import type {
   Department, Employee, Payslip, Position, Settings as CompanySettings,
 } from '@/lib/types';
 import { PrintAreaStyles } from './components';
-import { canSeeSensitive, useAuthSafe } from './useAuthSafe';
+import { canSeeSensitive, useAuthSafe } from '@/lib/useAuthSafe';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
 import {

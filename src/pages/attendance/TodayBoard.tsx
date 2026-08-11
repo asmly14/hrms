@@ -13,7 +13,7 @@ import {
   isLate, isScheduledWorkDay, nowHHmm, hhmmToMin, shiftEndMin, shiftForEmployee, todayISO,
   useRotations, type AttendanceX, type ShiftX,
 } from './model';
-import { useAuthSafe } from './useAuthSafe';
+import { useAuthSafe } from '@/lib/useAuthSafe';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 

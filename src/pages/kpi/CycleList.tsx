@@ -46,7 +46,7 @@ import {
   CYCLE_STAGE_LABELS, canAdvanceStage, canManageCycles, nextStage, renormalizeWeights,
   resolveReviewer, useKpiCycles, type KpiCycle,
 } from '@/lib/kpiEngine';
-import { useAuthSafe } from './useAuthSafe';
+import { useAuthSafe } from '@/lib/useAuthSafe';
 
 interface Props {
   employees: Employee[];

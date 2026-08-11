@@ -17,35 +17,51 @@ import { TenantProvider } from '@/lib/tenantContext';
 import { useTenant } from '@/lib/useTenant';
 import type { ModuleKey } from '@/lib/types';
 import LoginPage from '@/pages/login/LoginPage';
-import DashboardPage from '@/pages/dashboard';
-import EmployeesPage from '@/pages/employees/EmployeesPage';
-import EmployeeDetailPage from '@/pages/employees/EmployeeDetailPage';
-import AttendancePage from '@/pages/attendance/AttendancePage';
-import ShiftsPage from '@/pages/attendance/ShiftsPage';
-import LeavePage from '@/pages/leave/LeavePage';
-import HolidaysPage from '@/pages/holidays/HolidaysPage';
-import ClaimsPage from '@/pages/claims/ClaimsPage';
-import PayrollHome from '@/pages/payroll/PayrollHome';
-import RunDetail from '@/pages/payroll/RunDetail';
-import PayslipPage from '@/pages/payroll/PayslipPage';
-import MyPayslipsPage from '@/pages/payroll/MyPayslipsPage';
-import KpiPage from '@/pages/kpi';
-import ReviewCycle from '@/pages/kpi/ReviewCycle';
-import SalaryInsightsPage from '@/pages/insights/SalaryInsightsPage';
-import ReportsPage from '@/pages/reports/ReportsPage';
-import SettingsPage from '@/pages/settings/SettingsPage';
-import OnboardingPage from '@/pages/onboarding/OnboardingPage';
-import OffboardingPage from '@/pages/offboarding/OffboardingPage';
-import SuperAdminPage from '@/pages/superadmin/SuperAdminPage';
-import OrgPage from '@/pages/org/OrgPage';
-import OrgChartPage from '@/pages/org/OrgChartPage';
-import CompanyPage from '@/pages/company/CompanyPage';
-import { ContractsPage } from '@/pages/contracts/meta';
-import { EmployeeRecordsPage } from '@/pages/employees/records/meta';
-import { OnboardFormPage } from '@/pages/onboard/meta';
 import { isModuleEnabled, MODULE_DEFS } from '@/pages/company/modules';
 
+// Route-level code-splitting: every page is a lazy chunk so first paint only
+// downloads the shell + the route being opened. Each element is wrapped in
+// <Suspense> by guardElement() below (innermost, so a failed role/module gate
+// never triggers the page chunk download).
+const DashboardPage = lazy(() => import('@/pages/dashboard'));
+const EmployeesPage = lazy(() => import('@/pages/employees/EmployeesPage'));
+const EmployeeDetailPage = lazy(() => import('@/pages/employees/EmployeeDetailPage'));
+const AttendancePage = lazy(() => import('@/pages/attendance/AttendancePage'));
+const ShiftsPage = lazy(() => import('@/pages/attendance/ShiftsPage'));
+const LeavePage = lazy(() => import('@/pages/leave/LeavePage'));
+const HolidaysPage = lazy(() => import('@/pages/holidays/HolidaysPage'));
+const ClaimsPage = lazy(() => import('@/pages/claims/ClaimsPage'));
+const PayrollHome = lazy(() => import('@/pages/payroll/PayrollHome'));
+const RunDetail = lazy(() => import('@/pages/payroll/RunDetail'));
+const PayslipPage = lazy(() => import('@/pages/payroll/PayslipPage'));
+const MyPayslipsPage = lazy(() => import('@/pages/payroll/MyPayslipsPage'));
+const KpiPage = lazy(() => import('@/pages/kpi'));
+const ReviewCycle = lazy(() => import('@/pages/kpi/ReviewCycle'));
+const SalaryInsightsPage = lazy(() => import('@/pages/insights/SalaryInsightsPage'));
+const ReportsPage = lazy(() => import('@/pages/reports/ReportsPage'));
+const SettingsPage = lazy(() => import('@/pages/settings/SettingsPage'));
+const OnboardingPage = lazy(() => import('@/pages/onboarding/OnboardingPage'));
+const OffboardingPage = lazy(() => import('@/pages/offboarding/OffboardingPage'));
+const SuperAdminPage = lazy(() => import('@/pages/superadmin/SuperAdminPage'));
+const OrgPage = lazy(() => import('@/pages/org/OrgPage'));
+const OrgChartPage = lazy(() => import('@/pages/org/OrgChartPage'));
+const CompanyPage = lazy(() => import('@/pages/company/CompanyPage'));
+// These three live behind named re-exports in their module meta.ts files.
+const ContractsPage = lazy(() =>
+  import('@/pages/contracts/meta').then((m) => ({ default: m.ContractsPage })),
+);
+const EmployeeRecordsPage = lazy(() =>
+  import('@/pages/employees/records/meta').then((m) => ({ default: m.EmployeeRecordsPage })),
+);
+const OnboardFormPage = lazy(() =>
+  import('@/pages/onboard/meta').then((m) => ({ default: m.OnboardFormPage })),
+);
 const NotFound = lazy(() => import('@/pages/NotFound'));
+
+/** Shared suspense fallback for lazy route pages. */
+const routeFallback = (
+  <div className="p-8 text-sm text-muted-foreground">Loading…</div>
+);
 
 export interface RouteDef {
   path: string;
@@ -180,7 +196,9 @@ function ModuleGate({ module, children }: { module: ModuleKey; children: ReactNo
 
 /** Applies the route's guards: role gate outside, module gate inside. */
 function guardElement(r: RouteDef): ReactNode {
-  let el = r.element;
+  // Suspense is innermost: role/module gates run first and can redirect
+  // without ever downloading the lazy page chunk.
+  let el = <Suspense fallback={routeFallback}>{r.element}</Suspense>;
   if (r.module) el = <ModuleGate module={r.module}>{el}</ModuleGate>;
   if (r.roles) el = <RoleGate roles={r.roles}>{el}</RoleGate>;
   return el;
@@ -198,7 +216,14 @@ export default function App() {
           <Route path="/login" element={<LoginPage />} />
           {/* Public applicant onboarding form — resolves company/branding from
               the invite token itself; must stay OUTSIDE RequireAuth. */}
-          <Route path="/onboard/:token" element={<OnboardFormPage />} />
+          <Route
+            path="/onboard/:token"
+            element={
+              <Suspense fallback={routeFallback}>
+                <OnboardFormPage />
+              </Suspense>
+            }
+          />
           <Route element={<RequireAuth />}>
             <Route element={<AppLayout />}>
               {routeRegistry.map((r) => (
@@ -211,7 +236,7 @@ export default function App() {
               <Route
                 path="*"
                 element={
-                  <Suspense fallback={<div className="p-8 text-sm text-muted-foreground">Loading…</div>}>
+                  <Suspense fallback={routeFallback}>
                     <NotFound />
                   </Suspense>
                 }

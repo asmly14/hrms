@@ -17,7 +17,8 @@
  */
 
 import { getActiveCompany } from './db';
-import { getEffectiveHolidays, isWeekend } from './holidays';
+import { resolveWorkingWeek } from './appSettings';
+import { getEffectiveHolidays, isWeekend, isWeekendByPattern } from './holidays';
 import { round2 } from './utils';
 import type {
   Employee, LeaveRequest, PayrollProrationMethod, StateCode,
@@ -63,7 +64,8 @@ export function workingDaysInMonth(month: string, state: StateCode): number {
   return workingDatesInRange(monthBounds(month).start, monthBounds(month).end, state).length;
 }
 
-/** Working-day dates (ISO) within [from, to] inclusive for a state. */
+/** Working-day dates (ISO) within [from, to] inclusive for a state. The
+ *  company's configured workingWeek overrides the state weekend rule. */
 function workingDatesInRange(from: Date, to: Date, state: StateCode): string[] {
   const out: string[] = [];
   const years = new Set([from.getFullYear(), to.getFullYear()]);
@@ -71,9 +73,13 @@ function workingDatesInRange(from: Date, to: Date, state: StateCode): string[] {
   for (const y of years) {
     for (const h of getEffectiveHolidays(y, state)) holidayDates.add(h.date);
   }
+  // Resolve the tenant weekend pattern ONCE per range (config lookup reads
+  // storage); fall back to the state rule when no company is configured.
+  const ww = resolveWorkingWeek();
+  const rest = (d: Date) => (ww ? isWeekendByPattern(d, ww) : isWeekend(d, state));
   const d = new Date(from.getTime());
   while (d <= to) {
-    if (!isWeekend(d, state) && !holidayDates.has(toISO(d))) out.push(toISO(d));
+    if (!rest(d) && !holidayDates.has(toISO(d))) out.push(toISO(d));
     d.setDate(d.getDate() + 1);
   }
   return out;

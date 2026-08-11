@@ -30,7 +30,7 @@ import {
   Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle,
 } from '@/components/ui/empty';
 import { canManagePip, usePips, type Pip, type PipGoal } from '@/lib/kpiEngine';
-import { useAuthSafe } from './useAuthSafe';
+import { useAuthSafe } from '@/lib/useAuthSafe';
 
 interface Props {
   employees: Employee[];

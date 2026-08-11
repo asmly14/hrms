@@ -16,25 +16,23 @@
  *   - Role-gating predicates built on the Wave-1 auth API (`AuthContextValue`);
  *     all predicates fail OPEN when auth is null (pre-integration demo mode).
  *
- * Persistence: new localStorage collections 'cycles', 'objectives', 'checkins',
- * 'pips'. The db layer is schemaless JSON keyed by collection name; the
- * CollectionName union in db.ts is owned by another scope, so the names are
- * cast here (runtime behaviour is identical — a string key prefix).
+ * Persistence: localStorage collections 'cycles', 'objectives', 'checkins',
+ * 'pips' — all first-class members of the db.ts `COLLECTIONS` registry (P1
+ * unification), so the hooks below call `useCollection` directly with no
+ * typed casts and gain export/import/migration coverage.
  */
-import { useCollection, type CollectionName } from './db';
+import { useCollection } from './db';
 import type {
   Department, Employee, KPI, KPIReview, Position, PositionLevel, ReviewStatus,
 } from './types';
 import type { AuthContextValue } from './authContext';
 
-// ── Collections (new this wave) ──────────────────────────────────────────────
+// ── Collections (first-class registry members) ─────────────────────────────
 
-const asCollection = (name: string): CollectionName => name as unknown as CollectionName;
-
-export const CYCLES_COLLECTION = asCollection('cycles');
-export const OBJECTIVES_COLLECTION = asCollection('objectives');
-export const CHECKINS_COLLECTION = asCollection('checkins');
-export const PIPS_COLLECTION = asCollection('pips');
+export const CYCLES_COLLECTION = 'cycles';
+export const OBJECTIVES_COLLECTION = 'objectives';
+export const CHECKINS_COLLECTION = 'checkins';
+export const PIPS_COLLECTION = 'pips';
 
 // ── Review status helpers ────────────────────────────────────────────────────
 

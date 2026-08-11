@@ -14,4 +14,3 @@
  */
 export { default as OnboardFormPage } from './OnboardFormPage';
 
-export const routes = [{ path: '/onboard/:token', title: 'Onboarding Form', public: true }];

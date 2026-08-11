@@ -308,7 +308,7 @@ export default function OnboardFormPage() {
               <AcademicsStep form={form} patch={patch} errors={errors} />
             )}
             {stepKey === 'documents' && (
-              <DocumentsStep form={form} patch={patch} errors={errors} />
+              <DocumentsStep form={form} patch={patch} errors={errors} companyId={link.companyId} />
             )}
             {stepKey === 'declaration' && (
               <DeclarationStep form={form} patch={patch} errors={errors} company={company} />

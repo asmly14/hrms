@@ -6,7 +6,3 @@
 export { default as LeavePage } from './LeavePage';
 export { default as HolidaysPage } from '../holidays/HolidaysPage';
 
-export const routes = [
-  { path: '/leave', title: 'Leave' },
-  { path: '/holidays', title: 'Public Holidays' },
-];

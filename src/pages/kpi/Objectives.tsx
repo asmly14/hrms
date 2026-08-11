@@ -35,7 +35,7 @@ import {
   childObjectives, krProgress, objectiveProgress, useObjectives,
   type KeyResult, type Objective,
 } from '@/lib/kpiEngine';
-import { useAuthSafe } from './useAuthSafe';
+import { useAuthSafe } from '@/lib/useAuthSafe';
 
 interface Props {
   employees: Employee[];

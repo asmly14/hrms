@@ -13,7 +13,7 @@ import {
   DAY_NAMES, isLate, isScheduledWorkDay, shiftForEmployee, useRotations, workedHours,
   type AttendanceX, type ShiftX,
 } from './model';
-import { useAuthSafe } from './useAuthSafe';
+import { useAuthSafe } from '@/lib/useAuthSafe';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';

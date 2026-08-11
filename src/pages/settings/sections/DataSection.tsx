@@ -7,8 +7,8 @@ import { useRef, useState } from 'react';
 import { DatabaseBackup, Download, HardDrive, RefreshCw, TriangleAlert, Upload } from 'lucide-react';
 import { toast } from 'sonner';
 import {
-  COLLECTIONS, getActiveCompany, getActiveTenantId, getCollection, logAudit, setCollection,
-  tenantSeedFlag, useCollection, type CollectionName,
+  COLLECTIONS, exportTenantData, getActiveCompany, getActiveTenantId, importTenantData,
+  logAudit, setCollection, tenantSeedFlag, useCollection, type CollectionName,
 } from '@/lib/db';
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
@@ -107,8 +107,9 @@ export default function DataSection() {
   const bytes = (void refreshTick, storageBytes());
 
   const onExport = () => {
-    const data: Record<string, unknown[]> = {};
-    for (const name of COLLECTIONS) data[name] = getCollection(name);
+    // Registry-driven: every COLLECTIONS entry (core + module collections) is
+    // included automatically — the list can never drift out of sync again.
+    const data = exportTenantData();
     const company = getActiveCompany();
     const payload = {
       app: 'my-hrms-demo',
@@ -147,38 +148,11 @@ export default function DataSection() {
     setImporting(true);
     try {
       // Restore into the ACTIVE tenant only — never the tenant the file came
-      // from. Unknown collection names (not in the registry) are skipped:
-      // they can't be read back by any current screen.
+      // from. Any registry collection is accepted; unknown collection names
+      // (not in the registry) are skipped and reported.
       const tenant = getActiveTenantId() ?? 'co-asm';
-      const known = new Set<string>(COLLECTIONS);
-      let touched = 0;
-      let rows = 0;
-      const skipped: string[] = [];
-      for (const { name } of importPreview.entries) {
-        const items = importPreview.data[name];
-        if (!known.has(name)) {
-          skipped.push(name);
-          continue;
-        }
-        if (importMode === 'replace') {
-          setCollection(name as CollectionName, items, tenant);
-          rows += items.length;
-        } else {
-          // Merge by id: imported rows overwrite same-id rows, existing rows
-          // the file doesn't mention are kept.
-          const byId = new Map(
-            getCollection<{ id: string }>(name as CollectionName, tenant).map((r) => [r.id, r]),
-          );
-          for (const item of items) {
-            const id = (item as { id?: unknown })?.id;
-            if (typeof id === 'string') byId.set(id, item as { id: string });
-          }
-          const merged = [...byId.values()];
-          setCollection(name as CollectionName, merged, tenant);
-          rows += items.length;
-        }
-        touched += 1;
-      }
+      const report = importTenantData(importPreview.data, tenant, importMode);
+      const { touched, rows, skipped } = report;
       logAudit({
         actorName: DEMO_ACTOR,
         action: 'data.import',
@@ -259,10 +233,12 @@ export default function DataSection() {
           />
         </div>
         <p className="text-xs text-muted-foreground">
-          The export contains every collection (employees, attendance, leaves, claims, payroll runs, payslips, KPIs,
-          reviews, holidays, settings and audit) in one timestamped JSON file. Import validates the file, shows a
-          preview, then restores into the <strong>active company</strong> — merging by record id or replacing
-          collections outright.
+          The export contains every registry collection — core HR data (employees, attendance, leaves, claims, payroll
+          runs, payslips, KPIs, reviews, holidays, settings, audit) plus module data (lifecycle checklists &amp;
+          offboarding cases, org profiles, contracts &amp; fee payments, personnel files, onboarding links /
+          submissions / extras, KPI cycles / objectives / check-ins / PIPs, shift rotations) — in one timestamped JSON
+          file. Import validates the file, shows a preview, then restores into the <strong>active company</strong> —
+          merging by record id or replacing collections outright; unknown collection names are skipped and reported.
         </p>
       </SectionCard>
 

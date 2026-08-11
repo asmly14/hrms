@@ -9,12 +9,13 @@
  *  - Paternity     — EA 1955 s.60FA: 7 consecutive days per confinement.
  *  - Part-time     — Employment (Part-Time Employees) Regulations 2010:
  *                    AL 6 / 8 / 11, SL 10 / 13 / 15 by the same service tiers.
- * Day counting: working days exclude the employee's state weekend and public
- * holidays (isWeekend / isHoliday from @/lib/holidays) — those days do not
- * consume leave balance. Maternity & paternity are calendar-day entitlements.
+ * Day counting: working days exclude rest days and public holidays — the rest
+ * day pattern follows the tenant's Company.config.workingWeek when configured,
+ * else the employee's state weekend (isRestDay from @/lib/appSettings, layered
+ * over holidays.isWeekend). Maternity & paternity are calendar-day entitlements.
  */
-import { isHoliday, isWeekend } from '@/lib/holidays';
-import { getCollection } from '@/lib/db';
+import { isHoliday } from '@/lib/holidays';
+import { getLeaveTopUps, isRestDay } from '@/lib/appSettings';
 import { daysBetween } from '@/lib/utils';
 import type {
   Employee, Holiday, LeaveBalance, LeaveRequest, LeaveType, StateCode,
@@ -50,26 +51,18 @@ const ZERO_TOPUPS: LeaveTopUpDays = {
 };
 
 /**
- * Company leave top-ups from the extended settings record ('ext:leaveTopups',
- * written by Settings → Leave policy). Graceful fallback: any read or shape
- * problem yields zero top-ups, i.e. pure EA statutory minimums.
+ * Company leave top-ups — SINGLE read path: lib/appSettings getLeaveTopUps()
+ * layers system defaults → Company.config.leaveTopUps → the 'ext:leaveTopups'
+ * settings doc. (Previously this read only the settings doc, so config-level
+ * top-ups were silently ignored until a doc existed — audit §3 layering bypass.)
+ * Graceful fallback: any read or shape problem yields zero top-ups, i.e. pure
+ * EA statutory minimums.
  */
 export function leaveTopUps(): LeaveTopUpDays {
   try {
-    const row = getCollection<{ id: string; kind?: string; days?: Record<string, unknown> }>('settings')
-      .find((r) => r.id === 'ext:leaveTopups' || r.kind === 'leaveTopups');
-    if (!row?.days) return ZERO_TOPUPS;
-    const d = row.days;
-    const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? Math.floor(v) : 0);
-    return {
-      annual: num(d.annual),
-      sick: num(d.sick),
-      hospitalization: num(d.hospitalization),
-      maternity: num(d.maternity),
-      paternity: num(d.paternity),
-    };
+    return getLeaveTopUps();
   } catch {
-    return ZERO_TOPUPS;
+    return { ...ZERO_TOPUPS };
   }
 }
 
@@ -214,7 +207,7 @@ export function countLeaveDays(
     return { days: 0, workingDays: 0, weekendDays: 0, holidays };
   }
   if (halfDay && startISO === endISO && type !== 'maternity' && type !== 'paternity') {
-    const weekend = isWeekend(startISO, state);
+    const weekend = isRestDay(startISO, state);
     const h = isHoliday(startISO, state);
     if (h) holidays.push(h);
     // B3: a half day on a rest day / public holiday is not chargeable — the
@@ -244,7 +237,7 @@ export function countLeaveDays(
   for (let i = 0; i < calendarDays; i += 1) {
     const d = new Date(start.getTime());
     d.setDate(d.getDate() + i);
-    if (isWeekend(d, state)) { weekends += 1; continue; }
+    if (isRestDay(d, state)) { weekends += 1; continue; }
     const h = isHoliday(d, state);
     if (h) { holidays.push(h); continue; }
     working += 1;

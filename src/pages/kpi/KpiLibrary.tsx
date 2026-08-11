@@ -35,7 +35,7 @@ import {
 import {
   canManageKpiModule, checkWeightTotal,
 } from '@/lib/kpiEngine';
-import { useAuthSafe } from './useAuthSafe';
+import { useAuthSafe } from '@/lib/useAuthSafe';
 
 interface Props {
   employees: Employee[];

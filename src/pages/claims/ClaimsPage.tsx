@@ -30,7 +30,7 @@ import ApproverInbox from './ApproverInbox';
 import ClaimFormDialog from './ClaimFormDialog';
 import ClaimsDashboard from './ClaimsDashboard';
 import MyClaimsList from './MyClaimsList';
-import { useAuthSafe } from './useAuthSafe';
+import { useAuthSafe } from '@/lib/useAuthSafe';
 import {
   resolvePolicy, type ClaimPolicyDoc, type ClaimRecord,
 } from './claimPolicy';

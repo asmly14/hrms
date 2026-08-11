@@ -26,7 +26,7 @@ import { empById, monthLabel } from './helpers';
 import StatutoryOutputs from './StatutoryOutputs';
 import EmployeeAdjustDialog from './EmployeeAdjustDialog';
 import { Money } from './components';
-import { canSeeSensitive, useAuthSafe } from './useAuthSafe';
+import { canSeeSensitive, useAuthSafe } from '@/lib/useAuthSafe';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
@@ -266,6 +266,7 @@ export default function RunDetail() {
                           <span className="block text-xs text-muted-foreground">
                             {showSensitive ? empMap.get(p.employeeId)?.ic : '—'}
                           </span>
+                          <span className="block text-xs text-muted-foreground">{p.refNo ?? p.id}</span>
                         </TableCell>
                         <TableCell className="text-right"><Money>{fmtRM(p.basicPay)}</Money></TableCell>
                         <TableCell className="text-right"><Money>{fmtRM(p.allowances)}</Money></TableCell>
@@ -370,6 +371,7 @@ export default function RunDetail() {
                         <p className="font-medium">{empMap.get(p.employeeId)?.name ?? 'Unknown'}</p>
                         <ChevronRight className="h-4 w-4 text-muted-foreground" />
                       </div>
+                      <p className="mt-0.5 text-xs text-muted-foreground">{p.refNo ?? p.id}</p>
                       <div className="mt-2 grid grid-cols-3 gap-2 text-sm">
                         <div>
                           <p className="text-xs text-muted-foreground">Gross</p>

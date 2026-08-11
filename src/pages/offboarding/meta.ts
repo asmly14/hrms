@@ -3,4 +3,3 @@
  */
 export { default as OffboardingPage } from './OffboardingPage';
 
-export const routes = [{ path: '/offboarding', title: 'Offboarding' }];

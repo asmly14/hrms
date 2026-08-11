@@ -5,6 +5,4 @@
  */
 import CompanyPage from './CompanyPage';
 
-export const routes = [{ path: '/company', title: 'Company Setup' }];
-
 export default CompanyPage;

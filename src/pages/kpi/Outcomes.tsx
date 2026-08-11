@@ -30,7 +30,7 @@ import {
 } from '@/components/ui/empty';
 import { BANDS, bandFor100, score100to5, type ReviewExt } from './lib';
 import { activePipFor, canManagePip, isFinalReview, usePips } from '@/lib/kpiEngine';
-import { useAuthSafe } from './useAuthSafe';
+import { useAuthSafe } from '@/lib/useAuthSafe';
 
 interface Props {
   employees: Employee[];

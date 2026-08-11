@@ -23,6 +23,16 @@
  * `undoPayrollRun` deletes a run + its payslips and reverts its paid claims
  * back to approved; YTD recomputes naturally from the remaining payslips.
  *
+ * Cut-off (Company.config.payrollCutoffDay via appSettings.getPayrollCutoff):
+ * attendance OT and claims pay only when dated on/before the wage month's
+ * cut-off day; later-dated items roll into the next month's run — each run
+ * covers (previous cut-off, this cut-off], see `payrollPeriodFor`.
+ *
+ * Payslip numbering: every payslip gets a human `refNo` —
+ * `<numberFormats.payslipPrefix>-<YYYY-MM>-<NNNN>` (per-run sequence,
+ * continued past surviving slips on partial re-runs). Legacy payslips without
+ * refNo render their id.
+ *
  * YTD / PCB basis: stored payslips of the year + the employee's TP3
  * `ytdCarryIn` when present (seeded for the first recorded run of the year);
  * employees who joined before this year with no history get a
@@ -31,6 +41,7 @@
  */
 
 import { getCollection, setCollection, uid, logAudit } from './db';
+import { getPayrollCutoff, getPayslipPrefix } from './appSettings';
 import {
   calcEPF, calcSOCSO, calcEIS, calcPCB, calcOT, hrdfLevy, annualTax, PCB_RELIEFS,
   hourlyFromMonthly, orpFromMonthly, MINIMUM_WAGE, MAX_OT_HOURS_MONTH,
@@ -48,6 +59,49 @@ import type {
 export interface PayrollResult {
   run: PayrollRun;
   payslips: Payslip[];
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Payroll cut-off period (Company.config.payrollCutoffDay → run window)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Inclusive date window a payroll run covers for variable inputs. */
+export interface PayrollPeriod {
+  /** ISO date, inclusive — day after the PREVIOUS month's cut-off. */
+  start: string;
+  /** ISO date, inclusive — the wage month's cut-off day. */
+  end: string;
+  /** Effective cut-off day applied (clamped to 1–28 upstream). */
+  cutoffDay: number;
+}
+
+function isoOf(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+/**
+ * Cut-off window for a wage month: attendance/OT/claims dated AFTER the
+ * company's cut-off day roll into the NEXT month's run, so every run covers
+ * (previous cut-off, this cut-off] — e.g. cut-off 25, month 2026-08 covers
+ * 2026-07-26 → 2026-08-25. The day is clamped to the month length as a
+ * belt-and-braces guard (getPayrollCutoff already clamps to 1–28).
+ */
+export function payrollPeriodFor(month: string, cutoffDay: number): PayrollPeriod {
+  const [y, m] = month.split('-').map(Number);
+  const daysIn = (yy: number, mm: number) => new Date(yy, mm, 0).getDate();
+  const day = Math.min(Math.max(1, Math.round(cutoffDay)), 31);
+  const endDay = Math.min(day, daysIn(y, m));
+  const pm = m === 1 ? 12 : m - 1;
+  const py = m === 1 ? y - 1 : y;
+  const prevCutDay = Math.min(day, daysIn(py, pm));
+  const start = new Date(py, pm - 1, prevCutDay);
+  start.setDate(start.getDate() + 1);
+  return { start: isoOf(start), end: isoOf(new Date(y, m - 1, endDay)), cutoffDay: endDay };
+}
+
+/** True when an ISO date falls inside the period (inclusive both ends). */
+export function inPayrollPeriod(dateISO: string, period: Pick<PayrollPeriod, 'start' | 'end'>): boolean {
+  return dateISO >= period.start && dateISO <= period.end;
 }
 
 export interface RunPayrollOptions {
@@ -207,6 +261,8 @@ interface PayslipCtx {
   monthIndex: number;
   runId: string;
   method: PayrollProrationMethod;
+  /** Cut-off window for variable inputs (attendance OT + claims). */
+  period: PayrollPeriod;
   attendance: AttendanceRecord[];
   leaves: LeaveRequest[];
   claims: Claim[];
@@ -220,6 +276,7 @@ function buildCtx(month: string, runId: string, method: PayrollProrationMethod, 
     monthIndex: Number(month.split('-')[1]),
     runId,
     method,
+    period: payrollPeriodFor(month, getPayrollCutoff().cutoffDay),
     attendance: getCollection<AttendanceRecord>('attendance'),
     leaves: getCollection<LeaveRequest>('leaves'),
     claims: getCollection<Claim>('claims'),
@@ -260,8 +317,10 @@ function computePayslip(emp: Employee, ctx: PayslipCtx, adjustments: PayslipAdju
   const basicPay = round2(Math.max(0, basicPr.amount - unpaidDeduction));
 
   // ── Approved OT from attendance, split by day type (1.5×/2×/3×) ──
+  // Cut-off window: only records dated ≤ the company's cut-off day of the
+  // wage month feed this run; later-dated records roll into the next run.
   const otRecords = ctx.attendance.filter(
-    (a) => a.employeeId === emp.id && a.date.startsWith(month) && a.otApproved && a.otHours > 0,
+    (a) => a.employeeId === emp.id && inPayrollPeriod(a.date, ctx.period) && a.otApproved && a.otHours > 0,
   );
   const otHours = round2(otRecords.reduce((s, a) => s + a.otHours, 0));
   const hrp = hourlyFromMonthly(emp.baseSalary);
@@ -272,12 +331,12 @@ function computePayslip(emp: Employee, ctx: PayslipCtx, adjustments: PayslipAdju
   const otHoliday = otBy('holiday');
   const otPay = round2(otNormal + otRest + otHoliday);
 
-  // ── Approved claims in the month → non-statutory reimbursement ──
+  // ── Approved claims in the cut-off window → non-statutory reimbursement ──
   // Include status 'paid' too: claims already reimbursed by an earlier run
   // of THIS month stay reimbursable on idempotent re-runs (the superseded
   // run is deleted below, so they must roll into the replacement payslip).
   const monthClaims = ctx.claims.filter(
-    (c) => c.employeeId === emp.id && (c.status === 'approved' || c.status === 'paid') && c.claimDate.startsWith(month),
+    (c) => c.employeeId === emp.id && (c.status === 'approved' || c.status === 'paid') && inPayrollPeriod(c.claimDate, ctx.period),
   );
   const claimsTotal = round2(monthClaims.reduce((s, c) => s + c.amount, 0));
 
@@ -507,6 +566,7 @@ export function runPayroll(
   };
 
   const ctx = buildCtx(month, run.id, method, run.warnings);
+  run.cutoffDay = ctx.period.cutoffDay;
   const payslips: Payslip[] = employees.map((emp) => computePayslip(emp, ctx));
 
   // ── Persist: one run per month; non-targeted payslips survive on the new run ──
@@ -516,18 +576,35 @@ export function runPayroll(
   const survivingSlips = allSlips
     .filter((p) => p.monthKey === month && !targetIds.has(p.employeeId))
     .map((p) => ({ ...p, runId: run.id }));
+
+  // Human document numbers (numberFormats.payslipPrefix + month + per-run
+  // sequence), e.g. 'ASM-PS-2026-08-0012'. Sequences continue after the
+  // highest number held by surviving (non-targeted) payslips so partial
+  // re-runs never collide; a full re-run reproduces the same numbers.
+  // Legacy slips without refNo keep rendering their id (UI fallback).
+  const refBase = `${getPayslipPrefix()}-${month}-`;
+  const maxSeq = survivingSlips.reduce((max, p) => {
+    const n = p.refNo?.startsWith(refBase) ? Number(p.refNo.slice(refBase.length)) : NaN;
+    return Number.isFinite(n) ? Math.max(max, n) : max;
+  }, 0);
+  payslips.forEach((p, i) => {
+    p.refNo = `${refBase}${String(maxSeq + i + 1).padStart(4, '0')}`;
+  });
+
   setCollection('payslips', [...otherMonthSlips, ...survivingSlips, ...payslips]);
 
-  // Claims: targeted employees' approved/paid claims are (re)stamped onto the
-  // new run; surviving employees' already-paid claims follow their payslip so
-  // paidInRunId never points at a deleted run either. DRAFT runs do NOT stamp
-  // claims paid — that happens on finalize (QA: draft must be side-effect
-  // free so undo/adjust cycles never strand a claim). Only written when changed.
+  // Claims: targeted employees' approved/paid claims IN THE CUT-OFF WINDOW
+  // are (re)stamped onto the new run; claims dated after the cut-off stay
+  // 'approved' and roll into the next month's run untouched. Surviving
+  // employees' already-paid claims follow their payslip so paidInRunId never
+  // points at a deleted run either. DRAFT runs do NOT stamp claims paid —
+  // that happens on finalize (QA: draft must be side-effect free so
+  // undo/adjust cycles never strand a claim). Only written when changed.
   const paidSlipByEmp = new Map(payslips.map((p) => [p.employeeId, p]));
   const survivorEmpIds = new Set(survivingSlips.map((p) => p.employeeId));
   const isDraft = run.status === 'draft';
   const nextClaims = claims.map((c) => {
-    if (!c.claimDate.startsWith(month)) return c;
+    if (!inPayrollPeriod(c.claimDate, ctx.period)) return c;
     if (!isDraft && (c.status === 'approved' || c.status === 'paid') && paidSlipByEmp.has(c.employeeId)) {
       return { ...c, status: 'paid' as const, paidInRunId: run.id };
     }
@@ -559,7 +636,7 @@ export function runPayroll(
     action: run.status === 'draft' ? 'payroll.draft' : 'payroll.run',
     entity: 'payrollRuns',
     entityId: run.id,
-    detail: `${month}: ${run.employeeCount} payslips, net ${run.totalNet.toFixed(2)} (${run.status}, proration: ${PRORATION_LABELS[method]})`,
+    detail: `${month}: ${run.employeeCount} payslips, net ${run.totalNet.toFixed(2)} (${run.status}, proration: ${PRORATION_LABELS[method]}, cut-off day ${run.cutoffDay})`,
   });
 
   return { run, payslips };
@@ -619,7 +696,7 @@ export function setPayslipAdjustments(
   if (!existing || !emp) return null;
   const ctx = buildCtx(run.monthKey, runId, run.prorationMethod ?? resolveProrationMethod(), []);
   const recomputed = computePayslip(emp, ctx, adjustments);
-  const slip = replacePayslip(run, { ...recomputed, id: existing.id });
+  const slip = replacePayslip(run, { ...recomputed, id: existing.id, refNo: existing.refNo });
   logAudit({
     actorName: actor,
     action: 'payroll.payslip.adjust',
@@ -646,7 +723,7 @@ export function resetPayslipToDefaults(
   if (!existing || !emp) return null;
   const ctx = buildCtx(run.monthKey, runId, run.prorationMethod ?? resolveProrationMethod(), []);
   const recomputed = computePayslip(emp, ctx, []);
-  const slip = replacePayslip(run, { ...recomputed, id: existing.id });
+  const slip = replacePayslip(run, { ...recomputed, id: existing.id, refNo: existing.refNo });
   logAudit({
     actorName: actor,
     action: 'payroll.payslip.reset',
@@ -694,9 +771,13 @@ export function finalizePayrollRun(runId: string, runBy = 'system'): PayrollRun 
   if (run.status === 'finalized') return run;
   const slips = getCollection<Payslip>('payslips').filter((p) => p.runId === runId);
   const empIds = new Set(slips.map((p) => p.employeeId));
+  // Stamp only claims inside the run's cut-off window (the cut-off captured
+  // at run time wins; fall back to the current config for legacy runs) —
+  // after-cut-off claims stay approved for the next run.
+  const period = payrollPeriodFor(run.monthKey, run.cutoffDay ?? getPayrollCutoff().cutoffDay);
   const claims = getCollection<Claim>('claims');
   const nextClaims = claims.map((c) =>
-    c.claimDate.startsWith(run.monthKey) &&
+    inPayrollPeriod(c.claimDate, period) &&
     (c.status === 'approved' || c.status === 'paid') &&
     empIds.has(c.employeeId)
       ? { ...c, status: 'paid' as const, paidInRunId: runId }

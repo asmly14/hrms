@@ -4,13 +4,14 @@
  * Owned by the Lifecycle module agent (Wave 1). Pure client-side: checklist
  * template engine + Malaysian statutory helpers (EA 1955 s.12 notice tiers,
  * Termination & Lay-Off Benefits Regulations 1980 schedule, LHDN CP22A timing)
- * + localStorage-backed stores that reuse the db.ts pub/sub mechanism.
+ * + localStorage-backed stores on first-class registry collections.
  *
- * Storage note: db.ts `COLLECTIONS` is core-scaffold owned and cannot be
- * extended by this module, so lifecycle collections register their keys via a
- * typed cast — same `myhrms:` prefix, same reactive `useCollection` semantics.
+ * Storage note: `onboardingChecklists` and `offboardingCases` are members of
+ * the db.ts `COLLECTIONS` registry (P1 unification), so the stores below call
+ * `useCollection` directly — same `myhrms:t:<companyId>:` tenant prefix, no
+ * typed casts, full export/import/migration coverage.
  */
-import { logAudit, uid, useCollection, type CollectionName } from './db';
+import { logAudit, uid, useCollection } from './db';
 import type { Claim, Employee, LeaveBalance } from './types';
 import { round2 } from './utils';
 
@@ -470,17 +471,15 @@ export function buildOffboardingCase(input: {
 }
 
 /* ────────────────────────────────────────────────────────────
- * Reactive stores — reuse db.ts pub/sub on module-owned keys.
+ * Reactive stores — first-class registry collections (db.ts).
  * ──────────────────────────────────────────────────────────── */
 
-const asCollection = (name: string) => name as CollectionName;
-
 export function useOnboardingChecklists() {
-  return useCollection<OnboardingChecklist>(asCollection('onboardingChecklists'));
+  return useCollection<OnboardingChecklist>('onboardingChecklists');
 }
 
 export function useOffboardingCases() {
-  return useCollection<OffboardingCase>(asCollection('offboardingCases'));
+  return useCollection<OffboardingCase>('offboardingCases');
 }
 
 /* ────────────────────────────────────────────────────────────

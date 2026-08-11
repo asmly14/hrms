@@ -5,13 +5,16 @@
  * ApproveSubmissionDialog; Reject asks for a reason inline and re-opens the
  * link for the applicant to resubmit.
  */
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
-import { Download, FileText, ThumbsDown, ThumbsUp } from 'lucide-react';
+import { Download, FileText, Loader2, ThumbsDown, ThumbsUp } from 'lucide-react';
 import {
+  getOnboardDocumentDataUrl,
   rejectSubmission,
+  type OnboardDocument,
   type OnboardSubmission,
 } from '@/lib/onboardLinks';
+import { toastError } from '@/lib/toast';
 import { stateInfo } from '@/lib/holidays';
 import type { Department, Position, StateCode } from '@/lib/types';
 import { Badge } from '@/components/ui/badge';
@@ -51,6 +54,85 @@ function Row({ label, value }: { label: string; value?: string }) {
 
 function SectionTitle({ children }: { children: string }) {
   return <p className="pt-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">{children}</p>;
+}
+
+/**
+ * One submitted document — bytes load lazily from the docStore (legacy inline
+ * dataUrls migrate on this first read), with a spinner until they settle.
+ */
+function SubmissionDocItem({
+  companyId,
+  submissionId,
+  doc: d,
+}: {
+  companyId: string;
+  submissionId: string;
+  doc: OnboardDocument;
+}) {
+  const [url, setUrl] = useState<string | undefined>(d.dataUrl);
+  const [loading, setLoading] = useState(!d.dataUrl && !!d.docId);
+
+  useEffect(() => {
+    let live = true;
+    getOnboardDocumentDataUrl(companyId, submissionId, d)
+      .then((u) => {
+        if (live) {
+          setUrl(u);
+          setLoading(false);
+        }
+      })
+      .catch(() => {
+        if (live) setLoading(false);
+      });
+    return () => {
+      live = false;
+    };
+  }, [companyId, submissionId, d]);
+
+  const download = async () => {
+    const target = url ?? (await getOnboardDocumentDataUrl(companyId, submissionId, d).catch(() => undefined));
+    if (!target) {
+      toastError('Could not load document', 'The stored bytes are unavailable.');
+      return;
+    }
+    const a = document.createElement('a');
+    a.href = target;
+    a.download = d.fileName;
+    a.click();
+  };
+
+  return (
+    <li className="flex items-center gap-3 rounded-xl border p-2.5">
+      {loading ? (
+        <span className="flex h-12 w-12 items-center justify-center rounded-lg bg-stone-100 dark:bg-stone-800">
+          <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" aria-label="Loading document" />
+        </span>
+      ) : url?.startsWith('data:image') ? (
+        <a href={url} target="_blank" rel="noopener noreferrer">
+          <img
+            src={url}
+            alt={d.fileName}
+            className="h-12 w-12 rounded-lg object-cover"
+          />
+        </a>
+      ) : (
+        <span className="flex h-12 w-12 items-center justify-center rounded-lg bg-stone-100 dark:bg-stone-800">
+          <FileText className="h-5 w-5 text-muted-foreground" />
+        </span>
+      )}
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-sm font-medium">{d.fileName}</p>
+        <p className="text-xs text-muted-foreground">
+          {d.kind} · {fmtSize(d.sizeBytes)}
+        </p>
+      </div>
+      {(d.docId || d.dataUrl) && (
+        <Button variant="ghost" size="sm" onClick={() => void download()} title="Download">
+          <Download className="h-4 w-4" />
+        </Button>
+      )}
+    </li>
+  );
 }
 
 interface Props {
@@ -209,34 +291,12 @@ export default function SubmissionReviewDialog({
           ) : (
             <ul className="grid grid-cols-1 gap-2 py-1 sm:grid-cols-2">
               {submission.documents.map((d, i) => (
-                <li key={i} className="flex items-center gap-3 rounded-xl border p-2.5">
-                  {d.dataUrl?.startsWith('data:image') ? (
-                    <a href={d.dataUrl} target="_blank" rel="noopener noreferrer">
-                      <img
-                        src={d.dataUrl}
-                        alt={d.fileName}
-                        className="h-12 w-12 rounded-lg object-cover"
-                      />
-                    </a>
-                  ) : (
-                    <span className="flex h-12 w-12 items-center justify-center rounded-lg bg-stone-100 dark:bg-stone-800">
-                      <FileText className="h-5 w-5 text-muted-foreground" />
-                    </span>
-                  )}
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-medium">{d.fileName}</p>
-                    <p className="text-xs text-muted-foreground">
-                      {d.kind} · {fmtSize(d.sizeBytes)}
-                    </p>
-                  </div>
-                  {d.dataUrl && (
-                    <Button asChild variant="ghost" size="sm">
-                      <a href={d.dataUrl} download={d.fileName} title="Download">
-                        <Download className="h-4 w-4" />
-                      </a>
-                    </Button>
-                  )}
-                </li>
+                <SubmissionDocItem
+                  key={d.docId ?? `${d.fileName}-${i}`}
+                  companyId={submission.companyId}
+                  submissionId={submission.id}
+                  doc={d}
+                />
               ))}
             </ul>
           )}

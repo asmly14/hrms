@@ -4,4 +4,3 @@
  */
 export { default as HolidaysPage } from './HolidaysPage';
 
-export const routes = [{ path: '/holidays', title: 'Public Holidays' }];

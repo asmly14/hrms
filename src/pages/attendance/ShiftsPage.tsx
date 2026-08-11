@@ -19,7 +19,7 @@ import {
   DAY_NAMES, getRotations, hhmmToMin, restDayHint, saveRotations, shiftHours,
   todayISO, useRotations, type AttendanceX, type RotationPlan, type ShiftX,
 } from './model';
-import { actorName, isAdminOrHR, useAuthSafe } from './useAuthSafe';
+import { actorName, isAdminOrHR, useAuthSafe } from '@/lib/useAuthSafe';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';

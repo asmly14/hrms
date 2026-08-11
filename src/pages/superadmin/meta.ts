@@ -7,4 +7,3 @@
  */
 export { default as SuperAdminPage } from './SuperAdminPage';
 
-export const routes = [{ path: '/superadmin', title: 'Super Admin' }];

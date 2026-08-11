@@ -9,7 +9,7 @@ import {
 import { toast } from 'sonner';
 import { useCollection } from '@/lib/db';
 import { useRole } from '@/lib/useRole';
-import { useAuthSafe } from './useAuthSafe';
+import { useAuthSafe } from '@/lib/useAuthSafe';
 import { runPayroll, undoPayrollRun } from '@/lib/payrollEngine';
 import { fmtDate, fmtRM } from '@/lib/utils';
 import type { Employee, PayrollRun, Payslip, Settings as CompanySettings } from '@/lib/types';

@@ -3,4 +3,3 @@
  */
 export { default as OnboardingPage } from './OnboardingPage';
 
-export const routes = [{ path: '/onboarding', title: 'Onboarding' }];

@@ -1,7 +1,8 @@
 /**
- * Shared helpers for the payroll module: month labels, CSV building,
- * Blob downloads and small date math. No statutory figures here — all
- * rates come from `@/lib/statutory` / `@/lib/payrollEngine`.
+ * Shared helpers for the payroll module: month labels, small date math and
+ * employee lookups. CSV building / Blob downloads live in `@/lib/csv`
+ * (single implementation with the formula-injection guard). No statutory
+ * figures here — all rates come from `@/lib/statutory` / `@/lib/payrollEngine`.
  */
 import type { Employee } from '@/lib/types';
 
@@ -10,33 +11,6 @@ export function monthLabel(mk: string): string {
   const [y, m] = mk.split('-').map(Number);
   if (!y || !m) return mk;
   return new Date(y, m - 1, 1).toLocaleDateString('en-GB', { month: 'long', year: 'numeric' });
-}
-
-function csvCell(v: string | number): string {
-  let s = String(v);
-  // B11 — formula-injection guard: cells starting with = + - @ would be
-  // evaluated as formulas when opened in Excel; prefix an apostrophe so the
-  // value opens as inert text instead.
-  if (/^[=+\-@]/.test(s)) s = `'${s}`;
-  return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-}
-
-/** Rows → CSV text (CRLF, per RFC 4180). */
-export function toCsv(rows: (string | number)[][]): string {
-  return rows.map((r) => r.map(csvCell).join(',')).join('\r\n');
-}
-
-/** Download a text file via a Blob (BOM added for Excel compatibility). */
-export function downloadTextFile(filename: string, text: string, mime = 'text/csv'): void {
-  const blob = new Blob(['\ufeff' + text], { type: `${mime};charset=utf-8` });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
 }
 
 /** Fixed 2-decimal money for files — never localized, never 'RM'-prefixed. */

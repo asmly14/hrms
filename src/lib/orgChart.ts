@@ -3,11 +3,11 @@
  *
  * Two concerns live here:
  *
- * 1. EXTRA PER-TENANT COLLECTIONS. `lib/db.ts` keeps a fixed CollectionName
- *    union that module agents must not extend, so the org designer persists
- *    its own documents under the SAME physical naming convention
- *    (`myhrms:t:<companyId>:<collection>`) with a tiny private pub/sub that
- *    also re-reads on tenant switches (subscribeTenant from db.ts):
+ * 1. PER-TENANT PROFILE COLLECTIONS. The org designer persists its own
+ *    documents as first-class members of the db.ts `COLLECTIONS` registry
+ *    (`myhrms:t:<companyId>:<collection>`, standard `useCollection` pub/sub;
+ *    P1 registry unification replaced the former private pub/sub + typed
+ *    casts, so profiles now flow through export/import/migration too):
  *
  *      positionProfiles   → PositionProfile[]   (keyed by positionId)
  *      departmentProfiles → DepartmentProfile[] (keyed by departmentId)
@@ -25,8 +25,7 @@
  *    form selects) persist as explicit overrides in PositionProfile and win
  *    over the derivation, so the chart is stable across reloads.
  */
-import { useMemo, useSyncExternalStore } from 'react';
-import { DEFAULT_COMPANY_ID, getActiveTenantId, subscribeTenant, uid } from './db';
+import { getCollection, setCollection, uid, useCollection } from './db';
 import { bandForYears, listRoles, suggestSalary, type SalarySuggestion } from './salaryBenchmark';
 import type { Department, Employee, Position, PositionLevel, StateCode } from './types';
 
@@ -71,101 +70,13 @@ export type DepartmentProfilePatch = Partial<
 >;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Private per-tenant storage (mirrors db.ts key convention + pub/sub)
+// Registry-backed per-tenant storage (db.ts COLLECTIONS — P1 unification)
 // ─────────────────────────────────────────────────────────────────────────────
-
-const TENANT_PREFIX = 'myhrms:t:';
-type ExtraCollection = 'positionProfiles' | 'departmentProfiles';
-
-type Listener = () => void;
-const listeners = new Map<ExtraCollection, Set<Listener>>();
-
-function keyFor(name: ExtraCollection, tenantId?: string): string {
-  return `${TENANT_PREFIX}${tenantId ?? getActiveTenantId() ?? DEFAULT_COMPANY_ID}:${name}`;
-}
-
-function readRaw<T>(name: ExtraCollection, tenantId?: string): T[] {
-  try {
-    const raw = localStorage.getItem(keyFor(name, tenantId));
-    return raw ? (JSON.parse(raw) as T[]) : [];
-  } catch {
-    return [];
-  }
-}
-
-function writeRaw<T>(name: ExtraCollection, items: T[], tenantId?: string): void {
-  try {
-    localStorage.setItem(keyFor(name, tenantId), JSON.stringify(items));
-  } catch {
-    /* storage unavailable — demo mode keeps running in-memory */
-  }
-  listeners.get(name)?.forEach((fn) => {
-    try {
-      fn();
-    } catch {
-      /* listener errors must not break writes */
-    }
-  });
-}
-
-function subscribe(name: ExtraCollection, fn: Listener): () => void {
-  if (!listeners.has(name)) listeners.set(name, new Set());
-  listeners.get(name)!.add(fn);
-  return () => {
-    listeners.get(name)?.delete(fn);
-  };
-}
 
 export interface ProfileCollectionApi<T extends { id: string }, TPatch> {
   items: T[];
   upsert: (keyId: string, patch: TPatch) => T;
   remove: (keyId: string) => void;
-}
-
-/**
- * Reactive profile-collection hook — re-renders on own writes AND on
- * active-tenant switches (via db.ts subscribeTenant). Always scoped to the
- * active tenant, matching useCollection semantics.
- */
-function useProfileCollection<T extends { id: string }, TPatch>(
-  name: ExtraCollection,
-  keyOf: (item: T) => string,
-  make: (keyId: string, patch: TPatch) => T,
-): ProfileCollectionApi<T, TPatch> {
-  // Re-render on tenant switch so the snapshot below re-reads the new namespace.
-  useSyncExternalStore(subscribeTenant, () => getActiveTenantId() ?? '__system__');
-  const raw = useSyncExternalStore(
-    (fn) => subscribe(name, fn),
-    () => {
-      try {
-        return localStorage.getItem(keyFor(name)) ?? '';
-      } catch {
-        return '';
-      }
-    },
-  );
-  // Parse once per snapshot: keyed by the raw string so `items` keeps a
-  // stable reference across re-renders (a fresh array identity per render
-  // cascades through consumer useMemo chains into infinite setState loops).
-  const items = useMemo(() => (raw ? (JSON.parse(raw) as T[]) : []), [raw]);
-  return {
-    items,
-    upsert: (keyId, patch) => {
-      const all = readRaw<T>(name);
-      const idx = all.findIndex((it) => keyOf(it) === keyId);
-      const next = idx >= 0 ? { ...all[idx], ...patch, id: keyId } : make(keyId, patch);
-      if (idx >= 0) all[idx] = next;
-      else all.push(next);
-      writeRaw(name, all);
-      return next;
-    },
-    remove: (keyId) => {
-      writeRaw(
-        name,
-        readRaw<T>(name).filter((it) => keyOf(it) !== keyId),
-      );
-    },
-  };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -174,7 +85,7 @@ function useProfileCollection<T extends { id: string }, TPatch>(
 
 /** All position profiles for the active (or given) tenant. Non-reactive. */
 export function getPositionProfiles(tenantId?: string): PositionProfile[] {
-  return readRaw<PositionProfile>('positionProfiles', tenantId);
+  return getCollection<PositionProfile>('positionProfiles', tenantId);
 }
 
 /** One profile by positionId, or undefined when never customised. */
@@ -191,7 +102,7 @@ export function upsertPositionProfile(
   patch: PositionProfilePatch,
   tenantId?: string,
 ): PositionProfile {
-  const all = readRaw<PositionProfile>('positionProfiles', tenantId);
+  const all = getPositionProfiles(tenantId);
   const idx = all.findIndex((p) => p.positionId === positionId);
   const base: PositionProfile =
     idx >= 0
@@ -206,33 +117,26 @@ export function upsertPositionProfile(
   const next: PositionProfile = { ...base, ...patch, id: positionId, positionId, updatedAt: new Date().toISOString() };
   if (idx >= 0) all[idx] = next;
   else all.push(next);
-  writeRaw('positionProfiles', all, tenantId);
+  setCollection('positionProfiles', all, tenantId);
   return next;
 }
 
 /** Delete a position's profile (called when the position itself is deleted). */
 export function removePositionProfile(positionId: string, tenantId?: string): void {
-  writeRaw(
+  setCollection(
     'positionProfiles',
-    readRaw<PositionProfile>('positionProfiles', tenantId).filter((p) => p.positionId !== positionId),
+    getPositionProfiles(tenantId).filter((p) => p.positionId !== positionId),
     tenantId,
   );
 }
 
-/** Reactive position-profile collection (active tenant). */
+/**
+ * Reactive position-profile collection (active tenant) — standard
+ * `useCollection` pub/sub: re-renders on own writes AND on tenant switches.
+ */
 export function usePositionProfiles(): ProfileCollectionApi<PositionProfile, PositionProfilePatch> {
-  return useProfileCollection<PositionProfile, PositionProfilePatch>(
-    'positionProfiles',
-    (p) => p.positionId,
-    (positionId, patch) => ({
-      id: positionId,
-      positionId,
-      responsibilities: [],
-      qualifications: [],
-      ...patch,
-      updatedAt: new Date().toISOString(),
-    }),
-  );
+  const { items } = useCollection<PositionProfile>('positionProfiles');
+  return { items, upsert: upsertPositionProfile, remove: removePositionProfile };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -241,7 +145,7 @@ export function usePositionProfiles(): ProfileCollectionApi<PositionProfile, Pos
 
 /** All department profiles for the active (or given) tenant. Non-reactive. */
 export function getDepartmentProfiles(tenantId?: string): DepartmentProfile[] {
-  return readRaw<DepartmentProfile>('departmentProfiles', tenantId);
+  return getCollection<DepartmentProfile>('departmentProfiles', tenantId);
 }
 
 /** One profile by departmentId, or undefined when never customised. */
@@ -255,7 +159,7 @@ export function upsertDepartmentProfile(
   patch: DepartmentProfilePatch,
   tenantId?: string,
 ): DepartmentProfile {
-  const all = readRaw<DepartmentProfile>('departmentProfiles', tenantId);
+  const all = getDepartmentProfiles(tenantId);
   const idx = all.findIndex((p) => p.departmentId === departmentId);
   const base: DepartmentProfile =
     idx >= 0
@@ -264,26 +168,26 @@ export function upsertDepartmentProfile(
   const next: DepartmentProfile = { ...base, ...patch, id: departmentId, departmentId, updatedAt: new Date().toISOString() };
   if (idx >= 0) all[idx] = next;
   else all.push(next);
-  writeRaw('departmentProfiles', all, tenantId);
+  setCollection('departmentProfiles', all, tenantId);
   return next;
 }
 
 /** Delete a department's profile (called when the department itself is deleted). */
 export function removeDepartmentProfile(departmentId: string, tenantId?: string): void {
-  writeRaw(
+  setCollection(
     'departmentProfiles',
-    readRaw<DepartmentProfile>('departmentProfiles', tenantId).filter((p) => p.departmentId !== departmentId),
+    getDepartmentProfiles(tenantId).filter((p) => p.departmentId !== departmentId),
     tenantId,
   );
 }
 
-/** Reactive department-profile collection (active tenant). */
+/**
+ * Reactive department-profile collection (active tenant) — standard
+ * `useCollection` pub/sub: re-renders on own writes AND on tenant switches.
+ */
 export function useDepartmentProfiles(): ProfileCollectionApi<DepartmentProfile, DepartmentProfilePatch> {
-  return useProfileCollection<DepartmentProfile, DepartmentProfilePatch>(
-    'departmentProfiles',
-    (p) => p.departmentId,
-    (departmentId, patch) => ({ id: departmentId, departmentId, ...patch, updatedAt: new Date().toISOString() }),
-  );
+  const { items } = useCollection<DepartmentProfile>('departmentProfiles');
+  return { items, upsert: upsertDepartmentProfile, remove: removeDepartmentProfile };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

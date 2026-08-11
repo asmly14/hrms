@@ -274,6 +274,9 @@ export interface PayrollRun {
   warnings: string[];     // e.g. below-minimum-wage, OT > 104h
   /** Proration basis used for this run (absent on legacy runs = 'calendar'). */
   prorationMethod?: PayrollProrationMethod;
+  /** Cut-off day applied to this run — attendance/OT/claims dated after this
+   *  day of the wage month roll into the next run (absent on legacy runs). */
+  cutoffDay?: number;
   /** ISO datetime when a draft run was finalized (absent while still draft). */
   finalizedAt?: string;
 }
@@ -307,6 +310,10 @@ export interface PayslipAdjustment {
 
 export interface Payslip {
   id: string;
+  /** Human document number, e.g. 'ASM-PS-2026-08-0012' — built from the
+   *  company's numberFormats.payslipPrefix + wage month + a per-run sequence.
+   *  Absent on pre-refNo payslips; UIs fall back to `id`. */
+  refNo?: string;
   runId: string;
   employeeId: string;
   monthKey: string;       // 'YYYY-MM'

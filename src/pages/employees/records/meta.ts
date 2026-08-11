@@ -5,4 +5,3 @@
  */
 export { default as EmployeeRecordsPage } from './EmployeeRecordsPage';
 
-export const routes = [{ path: '/employees/:id/records', title: 'Employee Records' }];

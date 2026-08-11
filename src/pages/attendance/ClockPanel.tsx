@@ -17,7 +17,7 @@ import {
   geofenceVerdict, isLate, nowHHmm, shiftForEmployee, todayISO,
   useOfficeLocations, useRotations, type AttendanceX, type SettingsX, type ShiftX,
 } from './model';
-import { actorName, isKiosk, useAuthSafe } from './useAuthSafe';
+import { actorName, isKiosk, useAuthSafe } from '@/lib/useAuthSafe';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';

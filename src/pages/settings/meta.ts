@@ -5,6 +5,4 @@
  */
 import SettingsPage from './SettingsPage';
 
-export const routes = [{ path: '/settings', title: 'Settings' }];
-
 export default SettingsPage;

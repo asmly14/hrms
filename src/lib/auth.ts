@@ -42,7 +42,7 @@
  * the first page load.
  */
 import bcrypt from 'bcryptjs';
-import { getCollection, getCompanies, setActiveTenantId, uid } from './db';
+import { getCollection, getCompanies, getCompany, setActiveTenantId, uid } from './db';
 import { COMPANY_ID_ASM, COMPANY_ID_DESA, COMPANY_ID_MERDEKA, COMPANY_ID_ASMDIV } from './tenants';
 import type { Employee } from './types';
 
@@ -280,6 +280,18 @@ export function login(username: string, password: string): LoginResult {
   const account = findUser(username);
   if (!account || !verifyAndMigrate(account, password)) {
     return { ok: false, error: 'Invalid username or password.' };
+  }
+  // Tenant suspension gate: users of a SUSPENDED company cannot sign in.
+  // Checked only after credentials verify (never leak suspension to bad
+  // passwords). SuperAdmin carries companyId null and is never blocked.
+  if (account.companyId) {
+    const company = getCompany(account.companyId);
+    if (company?.status === 'suspended') {
+      return {
+        ok: false,
+        error: `Access for ${company.name} has been suspended. Please contact your SuperAdmin or support to reactivate the company.`,
+      };
+    }
   }
   const session: Session = {
     userId: account.id,

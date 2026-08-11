@@ -1,8 +1,10 @@
 /**
  * Step 5 — Document uploads. Five required kinds (IC copy, academic
  * certificates, CV, bank statement, photo) plus optional extras. Files are
- * capped at ~700 KB each (localStorage budget), stored as base64 dataUrls,
- * and shown as removable chips (images get a thumbnail).
+ * capped at ~700 KB each; bytes go straight into the per-tenant docStore
+ * (gzip + quota guards) at pick time, so the wizard draft — and later the
+ * submission record — carries only metadata + a docId. Thumbnails render
+ * from a session-local preview map (the bytes are already in memory).
  */
 import { useRef, useState } from 'react';
 import { FileText, ImageIcon, Upload, X } from 'lucide-react';
@@ -13,6 +15,8 @@ import {
   type OnboardDocKind,
   type OnboardDocument,
 } from '@/lib/onboardLinks';
+import { DocQuotaError, putDoc, removeDoc } from '@/lib/docStore';
+import { toastError } from '@/lib/toast';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { StepIntro } from '../fields';
@@ -54,18 +58,38 @@ interface Props {
   form: OnboardFormState;
   patch: (p: Partial<OnboardFormState>) => void;
   errors: FormErrors;
+  /** Tenant that owns the link — docStore writes are scoped to it explicitly
+   *  (the public wizard runs without a session / active tenant). */
+  companyId: string;
 }
 
-export default function DocumentsStep({ form, patch, errors }: Props) {
+export default function DocumentsStep({ form, patch, errors, companyId }: Props) {
   const inputRef = useRef<HTMLInputElement>(null);
   const pendingKind = useRef<OnboardDocKind>('IC');
   const [fileError, setFileError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  /** Session-local thumbnails, keyed by docId (bytes live in the docStore). */
+  const [previews, setPreviews] = useState<Record<string, string>>({});
 
   const pick = (kind: OnboardDocKind) => {
     pendingKind.current = kind;
     setFileError(null);
     inputRef.current?.click();
+  };
+
+  /** Best-effort byte cleanup for docs leaving the draft (orphan control). */
+  const releaseBytes = (docs: OnboardDocument[]) => {
+    for (const d of docs) {
+      const docId = d.docId;
+      if (!docId) continue;
+      void removeDoc(docId, companyId).catch(() => undefined);
+      setPreviews((p) => {
+        if (!(docId in p)) return p;
+        const next = { ...p };
+        delete next[docId];
+        return next;
+      });
+    }
   };
 
   const onFile = async (file: File | undefined) => {
@@ -78,31 +102,50 @@ export default function DocumentsStep({ form, patch, errors }: Props) {
     setBusy(true);
     try {
       const dataUrl = await readAsDataUrl(file);
+      // Bytes → docStore FIRST (per-doc + per-tenant quota guards live here);
+      // the draft keeps metadata + the reference only.
+      const docId = await putDoc(
+        { bytes: dataUrl, mime: file.type || undefined, sizeBytes: file.size, fileName: file.name },
+        companyId,
+      );
       const doc: OnboardDocument = {
         kind: pendingKind.current,
         fileName: file.name,
-        dataUrl,
+        docId,
         sizeBytes: file.size,
         uploadedAt: new Date().toISOString(),
       };
       // Replace same-kind uploads for the single-slot required kinds;
       // 'Other' accumulates.
+      const replaced = doc.kind === 'Other' ? [] : form.documents.filter((d) => d.kind === doc.kind);
       const next =
         doc.kind === 'Other'
           ? [...form.documents, doc]
           : [...form.documents.filter((d) => d.kind !== doc.kind), doc];
       patch({ documents: next });
+      setPreviews((p) => ({ ...p, [docId]: dataUrl }));
+      releaseBytes(replaced);
       setFileError(null);
-    } catch {
-      setFileError('Could not read that file — please try another one.');
+    } catch (err) {
+      if (err instanceof DocQuotaError) {
+        toastError(
+          err.kind === 'per-doc' ? 'File too large' : 'Document storage is full',
+          err,
+        );
+        setFileError(err.message);
+      } else {
+        setFileError('Could not read that file — please try another one.');
+      }
     } finally {
       setBusy(false);
       if (inputRef.current) inputRef.current.value = '';
     }
   };
 
-  const remove = (target: OnboardDocument) =>
+  const remove = (target: OnboardDocument) => {
     patch({ documents: form.documents.filter((d) => d !== target) });
+    releaseBytes([target]);
+  };
 
   const docsFor = (kind: OnboardDocKind) => form.documents.filter((d) => d.kind === kind);
 
@@ -166,38 +209,41 @@ export default function DocumentsStep({ form, patch, errors }: Props) {
 
               {docs.length > 0 && (
                 <ul className="mt-3 flex flex-wrap gap-2">
-                  {docs.map((d, i) => (
-                    <li
-                      key={`${d.fileName}-${i}`}
-                      className="flex items-center gap-2 rounded-full border bg-stone-50 py-1 pl-1.5 pr-1 text-xs dark:bg-stone-900/40"
-                    >
-                      {d.dataUrl?.startsWith('data:image') ? (
-                        <img
-                          src={d.dataUrl}
-                          alt=""
-                          className="h-7 w-7 rounded-full object-cover"
-                        />
-                      ) : (
-                        <span className="flex h-7 w-7 items-center justify-center rounded-full bg-stone-200 dark:bg-stone-800">
-                          {d.fileName.toLowerCase().endsWith('.pdf') ? (
-                            <FileText className="h-3.5 w-3.5" />
-                          ) : (
-                            <ImageIcon className="h-3.5 w-3.5" />
-                          )}
-                        </span>
-                      )}
-                      <span className="max-w-[140px] truncate font-medium">{d.fileName}</span>
-                      <span className="text-muted-foreground">{fmtSize(d.sizeBytes)}</span>
-                      <button
-                        type="button"
-                        onClick={() => remove(d)}
-                        aria-label={`Remove ${d.fileName}`}
-                        className="rounded-full p-1 text-muted-foreground hover:bg-stone-200 hover:text-foreground dark:hover:bg-stone-800"
+                  {docs.map((d, i) => {
+                    const url = (d.docId ? previews[d.docId] : undefined) ?? d.dataUrl;
+                    return (
+                      <li
+                        key={d.docId ?? `${d.fileName}-${i}`}
+                        className="flex items-center gap-2 rounded-full border bg-stone-50 py-1 pl-1.5 pr-1 text-xs dark:bg-stone-900/40"
                       >
-                        <X className="h-3.5 w-3.5" />
-                      </button>
-                    </li>
-                  ))}
+                        {url?.startsWith('data:image') ? (
+                          <img
+                            src={url}
+                            alt=""
+                            className="h-7 w-7 rounded-full object-cover"
+                          />
+                        ) : (
+                          <span className="flex h-7 w-7 items-center justify-center rounded-full bg-stone-200 dark:bg-stone-800">
+                            {d.fileName.toLowerCase().endsWith('.pdf') ? (
+                              <FileText className="h-3.5 w-3.5" />
+                            ) : (
+                              <ImageIcon className="h-3.5 w-3.5" />
+                            )}
+                          </span>
+                        )}
+                        <span className="max-w-[140px] truncate font-medium">{d.fileName}</span>
+                        <span className="text-muted-foreground">{fmtSize(d.sizeBytes)}</span>
+                        <button
+                          type="button"
+                          onClick={() => remove(d)}
+                          aria-label={`Remove ${d.fileName}`}
+                          className="rounded-full p-1 text-muted-foreground hover:bg-stone-200 hover:text-foreground dark:hover:bg-stone-800"
+                        >
+                          <X className="h-3.5 w-3.5" />
+                        </button>
+                      </li>
+                    );
+                  })}
                 </ul>
               )}
               {missing && errors[`doc-${kind}`] && (

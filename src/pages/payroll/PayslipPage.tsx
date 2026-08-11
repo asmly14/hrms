@@ -13,7 +13,7 @@ import type {
 } from '@/lib/types';
 import { monthLabel } from './helpers';
 import { PrintAreaStyles } from './components';
-import { useAuthSafe } from './useAuthSafe';
+import { useAuthSafe } from '@/lib/useAuthSafe';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
 
@@ -146,6 +146,7 @@ export default function PayslipPage() {
 
         {/* Employee + statutory numbers */}
         <div className="grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-3 md:grid-cols-4">
+          {kv('Payslip no.', slip.refNo ?? slip.id)}
           {kv('Employee', emp?.name ?? slip.employeeId)}
           {kv('NRIC / passport', emp?.ic ?? '—')}
           {kv('Department', dept?.name ?? '—')}

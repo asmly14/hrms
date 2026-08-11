@@ -19,11 +19,12 @@
  *    on first access — see the store block below.
  */
 
-import { useEffect, useState, useSyncExternalStore } from 'react';
+import { useSyncExternalStore } from 'react';
 import type {
   AttendanceRecord, Employee, OTDayType, Settings, Shift,
 } from '@/lib/types';
-import { isHoliday, isWeekend, stateInfo } from '@/lib/holidays';
+import { isHoliday, stateInfo } from '@/lib/holidays';
+import { getOfficeLocations, isRestDay } from '@/lib/appSettings';
 import { DEFAULT_COMPANY_ID, getActiveTenantId, subscribeTenant } from '@/lib/db';
 
 // ── Extended (module-local) shapes ───────────────────────────────────────────
@@ -75,61 +76,29 @@ export function officeLocationsOf(settings: SettingsX | undefined): { locations:
   return { locations: DEFAULT_OFFICE_LOCATIONS, isDefault: true };
 }
 
-/** Loose shape of the core helper module added in Wave 2 (lib/appSettings.ts). */
-type AppSettingsModule = { getOfficeLocations?: () => unknown };
-
 /**
  * Resolve geofence office locations. Prefers the core `getOfficeLocations()`
- * helper from `@/lib/appSettings` once that module exists (added by the core
- * agent this wave); falls back to the settings collection, then to demo
- * defaults. The glob import resolves to an empty map while the file is
- * absent, so this compiles and runs cleanly in both worlds.
+ * helper from `@/lib/appSettings`; falls back to the settings collection,
+ * then to demo defaults.
+ *
+ * STATIC import — this module already imports `isRestDay` statically and
+ * claims/claimPolicy.ts globs appSettings eagerly, so the earlier dynamic
+ * `import.meta.glob` here never actually split a chunk (vite warned about
+ * the mixed import). The helper is also synchronous, so the async loader
+ * was pure overhead. (Invalidates the old "glob resolves while the file is
+ * absent" comment — appSettings.ts is a permanent core module now.)
  */
 export function useOfficeLocations(
   settings: SettingsX | undefined,
 ): { locations: OfficeLocation[]; isDefault: boolean } {
-  const [fromCore, setFromCore] = useState<OfficeLocation[] | null>(null);
-
-  useEffect(() => {
-    let alive = true;
-    const loaders = import.meta.glob<AppSettingsModule>('../../lib/appSettings.ts');
-    const load = loaders['../../lib/appSettings.ts'];
-    if (load) {
-      load()
-        .then((mod) => {
-          if (!alive || typeof mod.getOfficeLocations !== 'function') return;
-          const raw = mod.getOfficeLocations();
-          if (!Array.isArray(raw)) return;
-          const locs = raw.filter(
-            (l): l is OfficeLocation =>
-              !!l &&
-              typeof l === 'object' &&
-              typeof (l as OfficeLocation).lat === 'number' &&
-              typeof (l as OfficeLocation).lng === 'number' &&
-              typeof (l as OfficeLocation).radiusM === 'number',
-          );
-          if (locs.length > 0) {
-            setFromCore(
-              locs.map((l, i) => ({
-                id: String(l.id ?? `office-${i}`),
-                name: String(l.name ?? 'Office'),
-                lat: l.lat,
-                lng: l.lng,
-                radiusM: l.radiusM,
-              })),
-            );
-          }
-        })
-        .catch(() => {
-          /* helper unavailable or failed — keep the fallback */
-        });
-    }
-    return () => {
-      alive = false;
-    };
-  }, []);
-
-  if (fromCore && fromCore.length > 0) return { locations: fromCore, isDefault: false };
+  const fromCore: OfficeLocation[] = getOfficeLocations().map((l) => ({
+    id: l.id,
+    name: l.name,
+    lat: l.lat,
+    lng: l.lng,
+    radiusM: l.radiusM,
+  }));
+  if (fromCore.length > 0) return { locations: fromCore, isDefault: false };
   return officeLocationsOf(settings);
 }
 
@@ -371,6 +340,7 @@ export function restDayHint(stateCode: Employee['state']): string {
 
 export function isRestOrHoliday(emp: Employee, shift: ShiftX | undefined, dateISO: string): boolean {
   if (isHoliday(dateISO, emp.state)) return true;
-  if (isWeekend(dateISO, emp.state) && !isScheduledWorkDay(emp, shift, dateISO)) return true;
+  // Tenant workingWeek (Company.config) overrides the state weekend rule.
+  if (isRestDay(dateISO, emp.state) && !isScheduledWorkDay(emp, shift, dateISO)) return true;
   return shift ? shift.restDay === new Date(`${dateISO}T00:00:00`).getDay() : false;
 }

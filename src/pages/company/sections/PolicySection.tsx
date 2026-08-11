@@ -13,7 +13,8 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { CalendarClock, CalendarHeart, MapPin, ReceiptText } from 'lucide-react';
 import { states, stateInfo } from '@/lib/holidays';
-import type { StateCode, WorkingWeek } from '@/lib/types';
+import { PRORATION_LABELS } from '@/lib/workdays';
+import type { PayrollProrationMethod, StateCode, WorkingWeek } from '@/lib/types';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
@@ -55,9 +56,19 @@ const CLAIM_FIELDS: {
   { key: 'phoneMonthlyLimit', label: 'Phone & internet limit (RM / month)', hint: 'Soft flag when a month\u2019s phone claims exceed this cap.', step: 10 },
 ];
 
+/** Proration basis options — the payroll engine reads config.payrollProration
+ *  (via workdays.resolveProrationMethod) for joiner/leaver pay and unpaid
+ *  leave deductions. */
+const PRORATION_OPTIONS: { value: PayrollProrationMethod; hint: string }[] = [
+  { value: 'calendar', hint: 'Monthly ÷ calendar days of the month (default).' },
+  { value: 'working-days', hint: 'Monthly ÷ working days — weekends follow the working week above, plus public holidays.' },
+  { value: 'fixed-26', hint: 'Monthly ÷ 26 — the EA 1955 s.60I ordinary rate of pay basis.' },
+];
+
 interface Draft {
   workingWeek: WorkingWeek;
   payrollCutoffDay: string;
+  payrollProration: PayrollProrationMethod;
   holidayState: StateCode;
   mileageRatePerKm: string;
   mealDailyLimit: string;
@@ -86,6 +97,7 @@ export default function PolicySection() {
     setDraft({
       workingWeek: cfg.workingWeek,
       payrollCutoffDay: String(cfg.payrollCutoffDay),
+      payrollProration: cfg.payrollProration ?? 'calendar',
       holidayState: company.hqState,
       mileageRatePerKm: cfg.claimPolicy.mileageRatePerKm != null ? String(cfg.claimPolicy.mileageRatePerKm) : '0.8',
       mealDailyLimit: cfg.claimPolicy.mealDailyLimit != null ? String(cfg.claimPolicy.mealDailyLimit) : '50',
@@ -143,11 +155,12 @@ export default function PolicySection() {
           ...c.config,
           workingWeek: draft.workingWeek,
           payrollCutoffDay: cutoff,
+          payrollProration: draft.payrollProration,
           claimPolicy: { ...claimValues },
           leaveTopUps: { ...draft.topUps },
         },
       }),
-      `Work & payroll policy saved (${draft.workingWeek}, cut-off day ${cutoff}, holidays ${draft.holidayState})`,
+      `Work & payroll policy saved (${draft.workingWeek}, cut-off day ${cutoff}, proration ${PRORATION_LABELS[draft.payrollProration]}, holidays ${draft.holidayState})`,
     );
     // Mirror into the legacy settings docs that appSettings accessors layer
     // over Company.config, so either reader sees the same effective values.
@@ -221,6 +234,29 @@ export default function PolicySection() {
             {!cutoffValid ? (
               <p className="text-xs text-destructive">Cut-off must be a whole number between 1 and 28.</p>
             ) : null}
+            <Field
+              label="Proration method"
+              hint="Basis for mid-month joiner/leaver pay and unpaid-leave deductions. The payroll engine applies it on the next run."
+            >
+              <Select
+                value={draft.payrollProration}
+                onValueChange={(v) => set('payrollProration', v as PayrollProrationMethod)}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select proration method" />
+                </SelectTrigger>
+                <SelectContent>
+                  {PRORATION_OPTIONS.map((o) => (
+                    <SelectItem key={o.value} value={o.value}>
+                      {PRORATION_LABELS[o.value]}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {PRORATION_OPTIONS.find((o) => o.value === draft.payrollProration)?.hint}
+              </p>
+            </Field>
             <Field
               label="Public-holiday state"
               hint="Holiday lists and replacement (in-lieu) rules follow this state. Synced with the HQ state on the Profile tab."

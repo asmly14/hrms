@@ -11,7 +11,8 @@ import { AlertTriangle, Download, Landmark } from 'lucide-react';
 import { toast } from 'sonner';
 import type { Employee, PayrollRun, Payslip, Settings } from '@/lib/types';
 import { fmtRM, round2 } from '@/lib/utils';
-import { downloadTextFile, monthLabel, num2, toCsv } from './helpers';
+import { downloadTextFile, rowsToCsv } from '@/lib/csv';
+import { monthLabel, num2 } from './helpers';
 import { FormHeader, Money } from './components';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
@@ -48,7 +49,7 @@ export default function StatutoryOutputs({ run, slips, empMap, settings }: Props
 
   const dl = (file: string, rows: (string | number)[][]) => {
     const filename = `${file}-${mk}.csv`;
-    downloadTextFile(filename, toCsv(rows));
+    downloadTextFile(filename, rowsToCsv(rows));
     toast.success('Download started', { description: filename });
   };
 

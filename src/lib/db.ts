@@ -24,6 +24,17 @@
  * (and `logAudit`) accept an optional trailing `tenantId` for cross-tenant
  * tooling (SuperAdmin console, seeding, migrations).
  *
+ * Collection registry
+ * ───────────────────
+ * `COLLECTIONS` / `CollectionName` are the SINGLE source of truth for every
+ * persisted collection, including the module stores (lifecycle, orgChart,
+ * contracts, employeeRecords, onboardLinks, kpiEngine) which previously
+ * bypassed the registry via typed casts. Registry membership drives JSON
+ * export/import (`exportTenantData`/`importTenantData`), legacy migration,
+ * per-tenant seed init and storage accounting — a collection that is not in
+ * the registry is silently dropped by all of them. Module stores use
+ * `useCollection` directly; no private pub/sub, no casts.
+ *
  * Migration
  * ─────────
  * `migrateLegacyData()` runs lazily on first storage access. Pre-multitenant
@@ -38,6 +49,7 @@ import { companySeedRecord, DEMO_COMPANY_IDS } from './tenants';
 export { DEMO_COMPANY_IDS };
 
 export const COLLECTIONS = [
+  // ── Core scaffold (Wave-0) ──────────────────────────────────────────────
   'departments',
   'positions',
   'employees',
@@ -53,6 +65,41 @@ export const COLLECTIONS = [
   'holidays',
   'settings',
   'audit',
+  // ── Module collections (P1 registry unification — audit-database Phase 0).
+  // These used to bypass the registry via typed casts in their module stores,
+  // which made JSON export / import / the Postgres migrator silently drop
+  // them. They are now first-class CollectionName entries; the stores below
+  // use the registry directly (no private pub/sub, no casts):
+  'onboardingChecklists', // lib/lifecycle.ts
+  'offboardingCases', //     lib/lifecycle.ts
+  'positionProfiles', //     lib/orgChart.ts
+  'departmentProfiles', //   lib/orgChart.ts
+  'contracts', //            lib/contracts.ts
+  'contractFeePayments', //  lib/contracts.ts
+  'employeeRecords', //      lib/employeeRecords.ts
+  'onboardLinks', //         lib/onboardLinks.ts
+  'onboardSubmissions', //   lib/onboardLinks.ts
+  'onboardingExtras', //     lib/onboardLinks.ts
+  'cycles', //               lib/kpiEngine.ts
+  'objectives', //           lib/kpiEngine.ts
+  'checkins', //             lib/kpiEngine.ts
+  'pips', //                 lib/kpiEngine.ts
+  // Attendance rotation plans. Physically a SUB-KEY
+  // (`myhrms:t:<companyId>:attendance:rotations`); the registry key builder
+  // composes exactly that, so export / import / legacy migration / per-tenant
+  // seed init now cover it. NOTE: pages/attendance/model.ts (outside the
+  // registry scope) still owns its private pub/sub + legacy-key migration, so
+  // registry-driven writes (e.g. an import) do not live-refresh already
+  // mounted attendance screens — they re-read on next mount. Keep model.ts
+  // as-is until its owner folds it into useCollection.
+  'attendance:rotations',
+  // Per-tenant document byte store (P1 docStore — deep-audit item 9). Base64
+  // document bytes used to be inlined in onboardSubmissions / employeeRecords
+  // records (one 700 KB file ≈ 934 KB of base64; a 5-doc onboarding ≈ the
+  // whole ~5 MB origin budget). Bytes now live here, gzip-compressed when
+  // beneficial, referenced by docId; records carry metadata only. Registry
+  // membership gives export/import, legacy migration and seed init for free.
+  'docBytes', //               lib/docStore.ts
 ] as const;
 
 export type CollectionName = (typeof COLLECTIONS)[number];
@@ -253,13 +300,95 @@ export function useCollection<T extends { id: string }>(name: CollectionName): C
   };
 }
 
+/**
+ * Per-tenant audit log cap. The log is append-only, so without rotation it
+ * grows without bound (audit-database finding). On every append the log is
+ * trimmed to the newest MAX_AUDIT_ENTRIES entries.
+ */
+export const MAX_AUDIT_ENTRIES = 2000;
+
 /** Append an audit entry (per-tenant; defaults to the active tenant). */
 export function logAudit(
   entry: Omit<import('./types').AuditLog, 'id' | 'at'> & { at?: string },
   tenantId?: string,
 ): void {
   const log: import('./types').AuditLog = { ...entry, id: uid(), at: entry.at ?? new Date().toISOString() };
-  setCollection('audit', [...getCollection<import('./types').AuditLog>('audit', tenantId), log], tenantId);
+  const all = [...getCollection<import('./types').AuditLog>('audit', tenantId), log];
+  // Rotate: keep the newest MAX_AUDIT_ENTRIES (entries are appended chronologically).
+  setCollection(
+    'audit',
+    all.length > MAX_AUDIT_ENTRIES ? all.slice(all.length - MAX_AUDIT_ENTRIES) : all,
+    tenantId,
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Registry-wide export / import (Settings → Data management)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Snapshot EVERY registry collection for a tenant (default: active) into one
+ * JSON-serializable map — the 'Export all data' payload. Iterating the
+ * COLLECTIONS registry (never a hardcoded list) means module collections
+ * (contracts, cycles, onboardingChecklists, …) can no longer be dropped.
+ * Global collections (holidays) read the shared key.
+ */
+export function exportTenantData(tenantId?: string): Record<CollectionName, unknown[]> {
+  const data = {} as Record<CollectionName, unknown[]>;
+  for (const name of COLLECTIONS) {
+    data[name] = getCollection(name, tenantId);
+  }
+  return data;
+}
+
+export interface ImportReport {
+  /** Registry collections that were restored. */
+  touched: number;
+  /** Rows read from the file across restored collections. */
+  rows: number;
+  /** Collection names in the file that are NOT in the registry (skipped). */
+  skipped: string[];
+}
+
+/**
+ * Restore an export payload into a tenant (default: active). Any registry
+ * collection is accepted; unknown keys are skipped and reported. `replace`
+ * overwrites each collection outright; `merge` upserts by record id (rows the
+ * file doesn't mention are kept). Global collections (holidays) write the
+ * shared key regardless of tenant.
+ */
+export function importTenantData(
+  data: Record<string, unknown[]>,
+  tenantId?: string,
+  mode: 'merge' | 'replace' = 'merge',
+): ImportReport {
+  const tenant = resolveTenant(tenantId);
+  const known = new Set<string>(COLLECTIONS);
+  const report: ImportReport = { touched: 0, rows: 0, skipped: [] };
+  for (const [name, items] of Object.entries(data)) {
+    if (!Array.isArray(items)) continue;
+    if (!known.has(name)) {
+      report.skipped.push(name);
+      continue;
+    }
+    if (mode === 'replace') {
+      setCollection(name as CollectionName, items, tenant);
+    } else {
+      // Merge by id: imported rows overwrite same-id rows, existing rows the
+      // file doesn't mention are kept.
+      const byId = new Map(
+        getCollection<{ id: string }>(name as CollectionName, tenant).map((r) => [r.id, r]),
+      );
+      for (const item of items) {
+        const id = (item as { id?: unknown })?.id;
+        if (typeof id === 'string') byId.set(id, item as { id: string });
+      }
+      setCollection(name as CollectionName, [...byId.values()], tenant);
+    }
+    report.rows += items.length;
+    report.touched += 1;
+  }
+  return report;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -400,59 +529,83 @@ export function tenantSeedFlag(companyId: string): string {
  * Seed ONE company if its tenant namespace is empty (idempotent per tenant).
  * Pass `force` to reseed. Demo companies come from seed.ts's registry;
  * unknown companies get an empty (but initialized) namespace.
+ *
+ * Returns a promise that resolves AFTER the dynamic seed-module import and
+ * all collection writes have landed — callers that must not read before the
+ * seed completes should `await` it (the seed module is code-split, so the
+ * work is inherently async; everything else here is synchronous localStorage).
  */
-export function seedTenantIfEmpty(companyId: string, force = false): void {
+export async function seedTenantIfEmpty(companyId: string, force = false): Promise<void> {
   if (typeof localStorage === 'undefined') return;
   ensureMigrated();
   if (!force && localStorage.getItem(tenantSeedFlag(companyId))) return;
-  void import('./seed').then(({ buildTenantSeedData }) => {
-    const data = buildTenantSeedData(companyId);
-    if (!data) {
-      // Unknown company: initialize empty collections so reads are stable.
-      (COLLECTIONS as readonly CollectionName[])
-        .filter((n) => !GLOBAL_COLLECTIONS.has(n))
-        .forEach((name) => {
-          if (localStorage.getItem(`${TENANT_PREFIX}${companyId}:${name}`) === null) {
-            localStorage.setItem(`${TENANT_PREFIX}${companyId}:${name}`, '[]');
-          }
-        });
-    } else {
-      (Object.keys(data.collections) as CollectionName[]).forEach((name) => {
-        setCollection(name, data.collections[name] as unknown[], companyId);
+  const { buildTenantSeedData } = await import('./seed');
+  const data = buildTenantSeedData(companyId);
+  if (!data) {
+    // Unknown company: initialize empty collections so reads are stable.
+    (COLLECTIONS as readonly CollectionName[])
+      .filter((n) => !GLOBAL_COLLECTIONS.has(n))
+      .forEach((name) => {
+        if (localStorage.getItem(`${TENANT_PREFIX}${companyId}:${name}`) === null) {
+          localStorage.setItem(`${TENANT_PREFIX}${companyId}:${name}`, '[]');
+        }
       });
-      upsertCompany(data.company);
-    }
-    localStorage.setItem(tenantSeedFlag(companyId), new Date().toISOString());
-  });
+  } else {
+    (Object.keys(data.collections) as CollectionName[]).forEach((name) => {
+      setCollection(name, data.collections[name] as unknown[], companyId);
+    });
+    upsertCompany(data.company);
+  }
+  localStorage.setItem(tenantSeedFlag(companyId), new Date().toISOString());
 }
 
 /**
  * Idempotent seeding of ALL demo tenants. Called automatically on module
  * import; safe to call again — it no-ops once every tenant flag is set.
  * Pass `force` to reseed everything.
+ *
+ * Awaited by `dbReady()` at module scope; direct callers should await it too
+ * when they need the writes to have landed (previously fire-and-forget —
+ * the seed race from audit-database Phase 0).
  */
-export function seedIfEmpty(force = false): void {
+export async function seedIfEmpty(force = false): Promise<void> {
   if (typeof localStorage === 'undefined') return;
   ensureMigrated();
-  void import('./seed').then(({ buildTenantSeedData }) => {
-    DEMO_COMPANY_IDS.forEach((companyId) => {
-      if (!force && localStorage.getItem(tenantSeedFlag(companyId))) return;
-      const data = buildTenantSeedData(companyId);
-      if (!data) return;
-      (Object.keys(data.collections) as CollectionName[]).forEach((name) => {
-        setCollection(name, data.collections[name] as unknown[], companyId);
-      });
-      upsertCompany(data.company);
-      localStorage.setItem(tenantSeedFlag(companyId), new Date().toISOString());
+  const { buildTenantSeedData } = await import('./seed');
+  DEMO_COMPANY_IDS.forEach((companyId) => {
+    if (!force && localStorage.getItem(tenantSeedFlag(companyId))) return;
+    const data = buildTenantSeedData(companyId);
+    if (!data) return;
+    (Object.keys(data.collections) as CollectionName[]).forEach((name) => {
+      setCollection(name, data.collections[name] as unknown[], companyId);
     });
-    // Legacy global flag — kept for pages that probe "has the seed run".
-    localStorage.setItem(SEED_FLAG, new Date().toISOString());
+    upsertCompany(data.company);
+    localStorage.setItem(tenantSeedFlag(companyId), new Date().toISOString());
   });
+  // Legacy global flag — kept for pages that probe "has the seed run".
+  localStorage.setItem(SEED_FLAG, new Date().toISOString());
+}
+
+/** Handle for the module-bottom auto-seed (null when storage was unavailable at import time). */
+let autoSeedPromise: Promise<void> | null = null;
+
+/**
+ * Ready pattern: resolves once the automatic first-run seed has finished
+ * (immediately when storage is unavailable — e.g. node tests that install a
+ * localStorage stub after import — or when everything was already seeded).
+ * Reactive pages converge on their own (seed writes notify subscribers), but
+ * non-React callers that must not read before initialization can
+ * `await dbReady()`.
+ */
+export function dbReady(): Promise<void> {
+  return autoSeedPromise ?? Promise.resolve();
 }
 
 // Module init: run migration + seed when storage is available (no-op in
 // node test environments until the localStorage stub is installed).
 if (typeof localStorage !== 'undefined') {
   ensureMigrated();
-  seedIfEmpty();
+  autoSeedPromise = seedIfEmpty();
+  // Seeding is best-effort in demo mode — never an unhandled rejection.
+  autoSeedPromise.catch(() => undefined);
 }

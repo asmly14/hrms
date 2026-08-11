@@ -46,7 +46,7 @@ import {
   canAcknowledge, canManagerScore, canSelfScore, canViewReview, checkinsForReview,
   cycleLocksScoring, useCheckins, useKpiCycles, type CheckIn,
 } from '@/lib/kpiEngine';
-import { useAuthSafe } from './useAuthSafe';
+import { useAuthSafe } from '@/lib/useAuthSafe';
 
 function ScorePicker({
   value, onChange, tone, disabled,

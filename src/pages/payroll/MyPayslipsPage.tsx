@@ -20,7 +20,7 @@ import { fmtDate, fmtRM } from '@/lib/utils';
 import type { PayrollRun, Payslip } from '@/lib/types';
 import { monthLabel } from './helpers';
 import { Money } from './components';
-import { useAuthSafe } from './useAuthSafe';
+import { useAuthSafe } from '@/lib/useAuthSafe';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
@@ -118,6 +118,9 @@ export default function MyPayslipsPage() {
                           >
                             {monthLabel(p.monthKey)}
                           </Link>
+                          <span className="block text-xs font-normal text-muted-foreground">
+                            {p.refNo ?? p.id}
+                          </span>
                         </TableCell>
                         <TableCell className="text-muted-foreground">{payDate(p)}</TableCell>
                         <TableCell className="text-right"><Money>{fmtRM(p.grossPay)}</Money></TableCell>
@@ -148,6 +151,7 @@ export default function MyPayslipsPage() {
                       <p className="font-medium">{monthLabel(p.monthKey)}</p>
                       <ChevronRight className="h-4 w-4 text-muted-foreground" />
                     </div>
+                    <p className="mt-0.5 text-xs text-muted-foreground">{p.refNo ?? p.id}</p>
                     <div className="mt-2 grid grid-cols-3 gap-2 text-sm">
                       <div>
                         <p className="text-xs text-muted-foreground">Pay date</p>

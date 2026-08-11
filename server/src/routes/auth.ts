@@ -45,6 +45,20 @@ export default async function authRoutes(app: FastifyInstance): Promise<void> {
       if (!account || !ok) {
         return reply.code(401).send({ error: 'Invalid username or password.' });
       }
+      // Tenant suspension gate: users of a SUSPENDED company cannot sign in.
+      // Checked only after credentials verify; SuperAdmin (company_id NULL) is
+      // cross-company and never blocked.
+      if (account.company_id) {
+        const c = await query<{ status: string }>(
+          'SELECT status FROM companies WHERE id = $1',
+          [account.company_id],
+        );
+        if (c.rows[0]?.status === 'suspended') {
+          return reply.code(403).send({
+            error: "This company's access has been suspended. Please contact your administrator or support to reactivate it.",
+          });
+        }
+      }
       const payload = {
         userId: account.id,
         username: account.username,

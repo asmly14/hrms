@@ -27,7 +27,8 @@
  * the seed or on a fresh install).
  */
 import { getActiveCompany, getCollection } from './db';
-import type { ClaimCategory, Settings } from './types';
+import { isWeekend, isWeekendByPattern } from './holidays';
+import type { ClaimCategory, Company, Settings, StateCode, WorkingWeek } from './types';
 
 /** Row shape of the mixed 'settings' collection. */
 interface SettingsRow {
@@ -228,4 +229,47 @@ export function getPayrollCutoff(): PayrollCutoffInfo {
     cutoffDay: Math.min(28, Math.max(1, Math.round(posNum(doc?.cutoffDay, posNum(cfgDay, DEFAULT_PAYROLL_CUTOFF.cutoffDay))))),
     workingDaysBasis: posNum(doc?.workingDaysBasis, DEFAULT_PAYROLL_CUTOFF.workingDaysBasis),
   };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Working week (tenant weekend pattern)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * The tenant's configured working week (weekend pattern). `Company.config.
+ * workingWeek` is the tenant-wide override of the state default (e.g. a JHR
+ * company running sat-sun). Resolution: explicit company → active company →
+ * null (caller falls back to the employee-state rule in holidays.isWeekend).
+ */
+export function resolveWorkingWeek(company?: Pick<Company, 'config'> | null): WorkingWeek | null {
+  const ww = (company ?? getActiveCompany())?.config?.workingWeek;
+  return ww === 'sat-sun' || ww === 'fri-sat' ? ww : null;
+}
+
+/**
+ * Rest-day test for a date in a state: the active company's configured
+ * workingWeek wins; with no company configured, the state default applies
+ * (fri-sat for JHR/KDH/KTN/TRG, sat-sun elsewhere — via holidays.isWeekend,
+ * which stays the single source of the day-of-week mapping).
+ */
+export function isRestDay(date: string | Date, state: StateCode): boolean {
+  const ww = resolveWorkingWeek();
+  return ww ? isWeekendByPattern(date, ww) : isWeekend(date, state);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Payslip document numbering
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Payslip number prefix: the active company's numberFormats.payslipPrefix,
+ * falling back to `<company code>-PS`, then 'PS'. Consumed by payrollEngine
+ * when stamping human payslip reference numbers (`<prefix>-<YYYY-MM>-NNNN`).
+ */
+export function getPayslipPrefix(): string {
+  const company = getActiveCompany();
+  const configured = company?.config?.numberFormats?.payslipPrefix?.trim();
+  if (configured) return configured;
+  const code = company?.code?.trim();
+  return code ? `${code.toUpperCase()}-PS` : 'PS';
 }

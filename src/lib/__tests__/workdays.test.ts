@@ -22,11 +22,18 @@ import {
   calendarDaysInMonth, daysInBasis, employedDaysInMonth, prorate,
   resolveProrationMethod, unpaidLeaveDaysInMonth, workingDaysInMonth,
 } from '../workdays';
-import { saveCompanies } from '../db';
+import { saveCompanies, setActiveTenantId } from '../db';
 import type { Company, LeaveRequest } from '../types';
 
 beforeEach(() => {
   installLocalStorage();
+  // System view (no active tenant): the day-count tests below pin the
+  // employee-STATE weekend rule. With a tenant active, the company's
+  // config.workingWeek overrides the state rule (covered in
+  // configTeeth.test.ts) — and the lazy legacy migration fabricates a default
+  // co-asm company on first collection access, so these tests must opt out
+  // of the tenant layer explicitly.
+  setActiveTenantId(null);
 });
 
 describe('calendarDaysInMonth', () => {
@@ -195,6 +202,7 @@ describe('resolveProrationMethod', () => {
   });
 
   it('reads the active company config and rejects invalid values', () => {
+    setActiveTenantId('co-asm');
     saveCompanies([{ ...base, config: { ...base.config, payrollProration: 'working-days' } }]);
     expect(resolveProrationMethod()).toBe('working-days');
     saveCompanies([

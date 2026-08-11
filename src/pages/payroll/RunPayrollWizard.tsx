@@ -5,16 +5,19 @@
  */
 import { useMemo, useState } from 'react';
 import {
-  AlertTriangle, BadgeCheck, ChevronLeft, ChevronRight, CircleAlert,
+  AlertTriangle, BadgeCheck, CalendarClock, ChevronLeft, ChevronRight, CircleAlert,
   ClipboardCheck, Globe2, Play, Search,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { useCollection } from '@/lib/db';
 import { useRole } from '@/lib/useRole';
-import { useAuthSafe } from './useAuthSafe';
-import { runPayroll, type PayrollResult } from '@/lib/payrollEngine';
+import { useAuthSafe } from '@/lib/useAuthSafe';
+import {
+  inPayrollPeriod, payrollPeriodFor, runPayroll, type PayrollResult,
+} from '@/lib/payrollEngine';
+import { getPayrollCutoff } from '@/lib/appSettings';
 import { MAX_OT_HOURS_MONTH, MINIMUM_WAGE } from '@/lib/statutory';
-import { fmtRM, monthKey, round2 } from '@/lib/utils';
+import { fmtDate, fmtRM, monthKey, round2 } from '@/lib/utils';
 import type { AttendanceRecord, Claim, Employee, LeaveRequest } from '@/lib/types';
 import { monthLabel, overlapDaysInMonth } from './helpers';
 import { Button } from '@/components/ui/button';
@@ -51,6 +54,16 @@ interface Preflight {
   claimsCount: number;
   claimsTotal: number;
   unpaidLeaveDays: number;
+  /** Cut-off applied to this run (Company.config.payrollCutoffDay layering). */
+  cutoffDay: number;
+  /** Inclusive window the run covers for OT/claims: (prev cut-off, cut-off]. */
+  periodStart: string;
+  periodEnd: string;
+  /** Items dated inside the wage month but AFTER the cut-off — they defer. */
+  deferredOtRecords: number;
+  deferredOtHours: number;
+  deferredClaimsCount: number;
+  deferredClaimsTotal: number;
 }
 
 export default function RunPayrollWizard({ open, onOpenChange, onCompleted }: WizardProps) {
@@ -88,9 +101,13 @@ export default function RunPayrollWizard({ open, onOpenChange, onCompleted }: Wi
     const belowMinWage = chosen.filter(
       (e) => e.employmentType === 'full-time' && e.baseSalary < MINIMUM_WAGE,
     );
+    // Cut-off window mirrors the engine: the run pays OT/claims dated in
+    // (previous cut-off, this cut-off]; later-dated items roll to next month.
+    const { cutoffDay } = getPayrollCutoff();
+    const period = payrollPeriodFor(month, cutoffDay);
     const otByEmp = new Map<string, { hours: number; records: number }>();
     attendance
-      .filter((a) => a.date.startsWith(month) && a.otApproved && a.otHours > 0)
+      .filter((a) => inPayrollPeriod(a.date, period) && a.otApproved && a.otHours > 0)
       .forEach((a) => {
         const cur = otByEmp.get(a.employeeId) ?? { hours: 0, records: 0 };
         cur.hours = round2(cur.hours + a.otHours);
@@ -116,7 +133,17 @@ export default function RunPayrollWizard({ open, onOpenChange, onCompleted }: Wi
 
     const chosenIds = new Set(chosen.map((e) => e.id));
     const monthClaims = claims.filter(
-      (c) => c.status === 'approved' && c.claimDate.startsWith(month) && chosenIds.has(c.employeeId),
+      (c) => c.status === 'approved' && inPayrollPeriod(c.claimDate, period) && chosenIds.has(c.employeeId),
+    );
+    // Deferred: dated inside the wage month but after the cut-off — these are
+    // excluded from THIS run and roll into the next month's run.
+    const deferredOt = attendance.filter(
+      (a) => chosenIds.has(a.employeeId) && a.otApproved && a.otHours > 0 &&
+        a.date.startsWith(month) && a.date > period.end,
+    );
+    const deferredClaims = claims.filter(
+      (c) => chosenIds.has(c.employeeId) && c.status === 'approved' &&
+        c.claimDate.startsWith(month) && c.claimDate > period.end,
     );
     const unpaidLeaveDays = leaves
       .filter(
@@ -135,6 +162,13 @@ export default function RunPayrollWizard({ open, onOpenChange, onCompleted }: Wi
       claimsCount: monthClaims.length,
       claimsTotal: round2(monthClaims.reduce((s, c) => s + c.amount, 0)),
       unpaidLeaveDays,
+      cutoffDay,
+      periodStart: period.start,
+      periodEnd: period.end,
+      deferredOtRecords: deferredOt.length,
+      deferredOtHours: round2(deferredOt.reduce((s, a) => s + a.otHours, 0)),
+      deferredClaimsCount: deferredClaims.length,
+      deferredClaimsTotal: round2(deferredClaims.reduce((s, c) => s + c.amount, 0)),
     };
   }, [eligible, selectedIds, attendance, claims, leaves, month]);
 
@@ -275,6 +309,28 @@ export default function RunPayrollWizard({ open, onOpenChange, onCompleted }: Wi
 
         {step === 2 && (
           <div className="space-y-4">
+            {/* Cut-off transparency: the window this run pays for, and what defers. */}
+            <div className="rounded-xl border p-3">
+              <p className="flex items-center gap-2 text-sm font-medium">
+                <CalendarClock className="h-4 w-4 text-amber-600" />
+                Payroll cut-off — day {preflight.cutoffDay} of the month
+              </p>
+              <p className="mt-1 pl-6 text-xs text-muted-foreground">
+                This run pays OT &amp; claims dated {fmtDate(preflight.periodStart)} –{' '}
+                {fmtDate(preflight.periodEnd)}.
+              </p>
+              {preflight.deferredOtRecords + preflight.deferredClaimsCount > 0 && (
+                <p className="mt-1 pl-6 text-xs font-medium text-amber-700 dark:text-amber-500">
+                  {preflight.deferredOtRecords > 0 &&
+                    `${preflight.deferredOtRecords} OT record(s) (${preflight.deferredOtHours}h)`}
+                  {preflight.deferredOtRecords > 0 && preflight.deferredClaimsCount > 0 && ' and '}
+                  {preflight.deferredClaimsCount > 0 &&
+                    `${preflight.deferredClaimsCount} claim(s) (${fmtRM(preflight.deferredClaimsTotal)})`}
+                  {' '}dated after the cut-off roll into next month&rsquo;s run.
+                </p>
+              )}
+            </div>
+
             <div className="grid gap-3 sm:grid-cols-3">
               <div className="rounded-xl border p-3">
                 <p className="text-xs text-muted-foreground">Approved OT feeding in</p>

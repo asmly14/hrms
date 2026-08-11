@@ -1,22 +1,10 @@
 /**
- * M8 — CSV helpers for the Reports center.
- * RFC-4180-ish escaping + UTF-8 BOM so Excel opens RM amounts correctly.
+ * M8 — report → CSV serialization for the Reports center.
+ * Cell escaping / downloads live in `@/lib/csv` (single implementation,
+ * formula-injection guard included); this module only maps BuiltReport shape.
  */
+import { toCsv, type CsvValue } from '@/lib/csv';
 import type { BuiltReport, ReportColumn, ReportRow } from './reportBuilders';
-
-export type CsvValue = string | number;
-
-function escapeCell(value: CsvValue): string {
-  const raw = String(value);
-  // Formula-injection guard: cells starting with = + - @ open as formulas in
-  // Excel/Sheets; prefix an apostrophe so they import as literal text.
-  const s = /^[=+\-@]/.test(raw) ? `'${raw}` : raw;
-  return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-}
-
-export function toCsv(headers: string[], rows: CsvValue[][]): string {
-  return [headers, ...rows].map((r) => r.map(escapeCell).join(',')).join('\r\n');
-}
 
 /** Serialize a built report (including its totals row) to CSV text. */
 export function reportCsv(report: BuiltReport): string {
@@ -30,18 +18,4 @@ export function reportCsv(report: BuiltReport): string {
   const t = report.totalRow;
   if (t) rows.push(report.columns.map((c) => cell(c, t)));
   return toCsv(report.columns.map((c) => c.label), rows);
-}
-
-/** Trigger a browser download of CSV text as a file. */
-export function downloadCsv(filename: string, csv: string): void {
-  // UTF-8 BOM prefix so Excel detects the encoding.
-  const blob = new Blob([String.fromCharCode(0xfeff) + csv], { type: 'text/csv;charset=utf-8;' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
 }

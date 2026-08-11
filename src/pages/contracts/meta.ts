@@ -3,4 +3,3 @@
  */
 export { default as ContractsPage } from './ContractsPage';
 
-export const routes = [{ path: '/contracts', title: 'Contracts' }];

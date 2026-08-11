@@ -6,15 +6,20 @@
  * emergency contacts, academics, employment history, document repository,
  * salary history, discipline, company assets and notes.
  *
- * Storage note: db.ts `COLLECTIONS` is core-scaffold owned and cannot be
- * extended by this module, so the `employeeRecords` collection registers its
- * key via a typed cast — same `myhrms:t:<companyId>:` tenant prefix, same
- * reactive `useCollection` semantics (pattern mirrors lib/lifecycle.ts).
+ * Storage note: `employeeRecords` is a first-class member of the db.ts
+ * `COLLECTIONS` registry (P1 unification) — the store below calls
+ * `useCollection` directly, same `myhrms:t:<companyId>:` tenant prefix, no
+ * typed casts. Document BYTES live in the per-tenant docStore
+ * (lib/docStore.ts, collection `docBytes`); RecordDocument entries carry
+ * metadata + a `docId`, and bytes are hydrated lazily via
+ * `getRecordDocumentDataUrl` (which also migrates legacy inline `dataUrl`
+ * entries into the docStore on first access — transparent, idempotent).
  *
  * One EmployeeRecordFile per employeeId, created on demand; every mutation
  * writes an audit entry.
  */
-import { getCollection, logAudit, setCollection, uid, useCollection, type CollectionName } from './db';
+import { getActiveTenantId, getCollection, logAudit, setCollection, uid, useCollection } from './db';
+import { getDoc, putDoc, removeDoc } from './docStore';
 import { round2 } from './utils';
 import type { Employee } from './types';
 
@@ -89,7 +94,12 @@ export interface RecordDocument {
   id: string;
   kind: DocumentKind;
   fileName: string;
-  /** Inlined file payload (≤ MAX_DOCUMENT_BYTES). Optional for metadata-only entries. */
+  /** Reference into the per-tenant docStore (lib/docStore.ts) — the canonical
+   *  home of the bytes. New uploads always carry this. */
+  docId?: string;
+  /** LEGACY inline payload (≤ MAX_DOCUMENT_BYTES). Pre-docStore entries still
+   *  have the bytes here; they migrate into the docStore on first byte access
+   *  (`getRecordDocumentDataUrl`), which then drops this field. */
   dataUrl?: string;
   sizeBytes: number;
   issueDate?: string; // ISO date
@@ -220,21 +230,18 @@ export function daysUntil(iso: string, asOf: string = todayISO()): number {
 }
 
 /* ────────────────────────────────────────────────────────────
- * Reactive store — db.ts pub/sub on a module-owned key
+ * Reactive store — first-class registry collection (db.ts)
  * ──────────────────────────────────────────────────────────── */
 
 export const EMPLOYEE_RECORDS_COLLECTION = 'employeeRecords';
 
-const asCollection = (name: string) => name as CollectionName;
-const col = () => asCollection(EMPLOYEE_RECORDS_COLLECTION);
-
 export function useEmployeeRecordFiles() {
-  return useCollection<EmployeeRecordFile>(col());
+  return useCollection<EmployeeRecordFile>(EMPLOYEE_RECORDS_COLLECTION);
 }
 
 /** Non-reactive read of one employee's file (undefined until created). */
 export function getRecordFile(employeeId: string): EmployeeRecordFile | undefined {
-  return getCollection<EmployeeRecordFile>(col()).find((f) => f.employeeId === employeeId);
+  return getCollection<EmployeeRecordFile>(EMPLOYEE_RECORDS_COLLECTION).find((f) => f.employeeId === employeeId);
 }
 
 export function emptyRecordFile(employeeId: string): Omit<EmployeeRecordFile, 'id'> {
@@ -294,7 +301,7 @@ export function mutateRecordFile(
   mutate: (file: EmployeeRecordFile) => EmployeeRecordFile,
   audit: { action: string; detail: string; actorName: string },
 ): EmployeeRecordFile {
-  const all = getCollection<EmployeeRecordFile>(col());
+  const all = getCollection<EmployeeRecordFile>(EMPLOYEE_RECORDS_COLLECTION);
   const existing = all.find((f) => f.employeeId === employeeId);
   let next: EmployeeRecordFile[];
   let base: EmployeeRecordFile;
@@ -307,7 +314,7 @@ export function mutateRecordFile(
     next = [...all, created];
     auditRecords('records.file.create', employeeId, 'Personnel file created', audit.actorName);
   }
-  setCollection(col(), next);
+  setCollection(EMPLOYEE_RECORDS_COLLECTION, next);
   auditRecords(audit.action, employeeId, audit.detail, audit.actorName);
   return next.find((f) => f.employeeId === employeeId)!;
 }
@@ -399,15 +406,104 @@ export function saveDocument(
       `File exceeds the ${Math.round(MAX_DOCUMENT_BYTES / 1024)} KB limit (${(doc.sizeBytes / 1024).toFixed(0)} KB).`,
     );
   }
+  // Canonical form: bytes live in the docStore — never persist an inline copy
+  // alongside a docId reference. (Legacy callers passing only dataUrl are
+  // stored as-is and migrate on first byte access.)
+  const clean = { ...doc };
+  if (clean.docId) delete clean.dataUrl;
   upsertItem(
     employeeId,
     'documents',
-    { ...doc, uploadedAt: doc.uploadedAt ?? new Date().toISOString() },
+    { ...clean, uploadedAt: doc.uploadedAt ?? new Date().toISOString() },
     { action: 'records.document.save', detail: `${doc.kind}: ${doc.fileName}`, actorName: actor },
   );
 }
-export const removeDocument = (employeeId: string, id: string, fileName: string, actor: string) =>
-  removeItem(employeeId, 'documents', id, { action: 'records.document.remove', detail: `Removed ${fileName}`, actorName: actor });
+export function removeDocument(employeeId: string, id: string, fileName: string, actor: string): void {
+  // Grab the docId before the entry leaves the file so the docStore bytes go too.
+  const doc = getRecordFile(employeeId)?.documents.find((d) => d.id === id);
+  removeItem(employeeId, 'documents', id, {
+    action: 'records.document.remove',
+    detail: `Removed ${fileName}`,
+    actorName: actor,
+  });
+  if (doc?.docId) void removeDoc(doc.docId).catch(() => undefined);
+}
+
+/* ────────────────────────────────────────────────────────────
+ * Document bytes — lazy docStore reads + legacy inline migration
+ * ──────────────────────────────────────────────────────────── */
+
+/** In-flight legacy migrations, keyed by tenant + employee + document id. */
+const recordDocMigrations = new Map<string, Promise<void>>();
+
+/**
+ * Resolve a personnel-file document's bytes as a dataUrl, lazily (the
+ * DocumentsTab preview/download calls this and renders a spinner until it
+ * settles). Canonical path: `docId` → docStore. LEGACY path: an inline
+ * `dataUrl` is migrated into the docStore on this first access and the stored
+ * record is rewritten to metadata + docId — transparent (the dataUrl is
+ * returned either way) and idempotent (the rewrite only fires while inline
+ * bytes are still present; concurrent reads share one in-flight migration).
+ * If migration cannot persist (tenant doc budget full) the inline bytes stay
+ * put — no regression vs. the old behavior. Migration is a silent storage
+ * move: it writes no audit entries.
+ */
+export async function getRecordDocumentDataUrl(
+  employeeId: string,
+  doc: RecordDocument,
+  tenantId?: string,
+): Promise<string | undefined> {
+  if (doc.docId) {
+    const fromStore = await getDoc(doc.docId, tenantId).catch(() => undefined);
+    if (fromStore) return fromStore;
+    if (!doc.dataUrl) return undefined; // dangling docId — no fallback
+  }
+  if (!doc.dataUrl) return undefined;
+
+  const dataUrl = doc.dataUrl;
+  const migKey = `${tenantId ?? getActiveTenantId() ?? 'co-asm'}|${employeeId}|${doc.id}`;
+  const inflight = recordDocMigrations.get(migKey);
+  if (inflight) {
+    await inflight.catch(() => undefined);
+    return dataUrl;
+  }
+
+  const migration = (async () => {
+    const docId = await putDoc(
+      { bytes: dataUrl, sizeBytes: doc.sizeBytes, fileName: doc.fileName },
+      tenantId,
+    );
+    const all = getCollection<EmployeeRecordFile>(EMPLOYEE_RECORDS_COLLECTION, tenantId);
+    const target = all.find((f) => f.employeeId === employeeId);
+    if (!target) return;
+    let changed = false;
+    const documents = (target.documents ?? []).map((d) => {
+      if (d.id === doc.id && d.dataUrl && !d.docId) {
+        changed = true;
+        const next = { ...d, docId };
+        delete next.dataUrl;
+        return next;
+      }
+      return d;
+    });
+    if (changed) {
+      setCollection(
+        EMPLOYEE_RECORDS_COLLECTION,
+        all.map((f) => (f.employeeId === employeeId ? { ...f, documents } : f)),
+        tenantId,
+      );
+    }
+  })();
+  recordDocMigrations.set(migKey, migration);
+  try {
+    await migration;
+  } catch {
+    // Budget full / storage hiccup — bytes stay inline; retry on next access.
+  } finally {
+    recordDocMigrations.delete(migKey);
+  }
+  return dataUrl;
+}
 
 // Discipline
 export const saveDiscipline = (employeeId: string, d: Omit<DisciplineRecord, 'id'> & { id?: string }, actor: string) =>
