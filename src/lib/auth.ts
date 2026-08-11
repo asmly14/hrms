@@ -42,7 +42,10 @@
  * the first page load.
  */
 import bcrypt from 'bcryptjs';
-import { getCollection, getCompanies, getCompany, setActiveTenantId, uid } from './db';
+import {
+  getCollection, getCompanies, getCompany, logSystemAudit, setActiveTenantId,
+  trialStatusOf, uid,
+} from './db';
 import { COMPANY_ID_ASM, COMPANY_ID_DESA, COMPANY_ID_MERDEKA, COMPANY_ID_ASMDIV } from './tenants';
 import type { Employee } from './types';
 
@@ -292,6 +295,15 @@ export function login(username: string, password: string): LoginResult {
         error: `Access for ${company.name} has been suspended. Please contact your SuperAdmin or support to reactivate the company.`,
       };
     }
+    // Trial-expiry gate: same pattern as suspension — trial companies whose
+    // trialEndsAt has passed cannot sign in (upgrade path is via support /
+    // the SuperAdmin console). SuperAdmin is never blocked.
+    if (company && trialStatusOf(company).expired) {
+      return {
+        ok: false,
+        error: `The trial for ${company.name} has expired. Please contact support to upgrade and reactivate access.`,
+      };
+    }
   }
   const session: Session = {
     userId: account.id,
@@ -350,4 +362,32 @@ export function currentUser(): PublicUser | null {
     companyId: session.companyId,
     employeeId: session.employeeId,
   };
+}
+
+/**
+ * SuperAdmin impersonation audit (audit-multitenant §4.2). Writes
+ * 'superadmin.enter_company' / 'superadmin.exit_company' into the GLOBAL
+ * system audit stream (db.logSystemAudit) — never into a tenant trail, so the
+ * record survives tenant deletion and is not editable by tenant admins.
+ *
+ * The SuperAdmin guard lives HERE (session check), not just at the call
+ * sites in tenantContext, so the trail cannot be written by regular
+ * sessions even if a caller forgets to check. No-op when the session is not
+ * SuperAdmin or the company is unknown.
+ */
+export function auditImpersonation(action: 'enter' | 'exit', companyId: string): void {
+  const session = getSession();
+  if (session?.role !== 'SuperAdmin') return;
+  const company = getCompany(companyId);
+  if (!company) return;
+  logSystemAudit({
+    actorName: session.username,
+    action: action === 'enter' ? 'superadmin.enter_company' : 'superadmin.exit_company',
+    companyId: company.id,
+    companyName: company.name,
+    detail:
+      action === 'enter'
+        ? `Impersonation started — working inside ${company.name} (${company.code}).`
+        : `Impersonation ended — left ${company.name} (${company.code}) for the system view.`,
+  });
 }

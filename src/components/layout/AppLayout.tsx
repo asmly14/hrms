@@ -19,6 +19,7 @@ import { useTenant } from '@/lib/useTenant';
 import { useCollection } from '@/lib/db';
 import type { Settings as CompanySettings } from '@/lib/types';
 import { useCompanyBranding } from '@/pages/company/branding';
+import TrialExpiredBanner from '@/pages/superadmin/TrialExpiredBanner';
 import { MOBILE_PATHS, visibleNavItems } from './nav';
 import { useEffectiveRole } from './useEffectiveRole';
 import { useCompanyLabel } from './useCompanyLabel';
@@ -320,6 +321,7 @@ export default function AppLayout({ children }: { children?: ReactNode }) {
     <div className="min-h-screen bg-background text-foreground">
       <TopBar />
       <SystemViewBanner />
+      <TrialExpiredBanner />
       <div className="flex">
         <SideNav />
         <main className="min-w-0 flex-1 px-4 pb-24 pt-6 md:px-8 md:pb-10">

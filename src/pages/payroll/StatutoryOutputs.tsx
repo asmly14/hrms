@@ -14,6 +14,7 @@ import { fmtRM, round2 } from '@/lib/utils';
 import { downloadTextFile, rowsToCsv } from '@/lib/csv';
 import { monthLabel, num2 } from './helpers';
 import { FormHeader, Money } from './components';
+import GLExportPanel from './GLExportPanel';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -55,6 +56,9 @@ export default function StatutoryOutputs({ run, slips, empMap, settings }: Props
 
   return (
     <div className="space-y-6">
+      {/* ── Accounting GL export (double-entry journal) ────────── */}
+      <GLExportPanel run={run} slips={slips} />
+
       {/* ── EPF Form A ─────────────────────────────────────────── */}
       <Card className="rounded-xl">
         <CardHeader>

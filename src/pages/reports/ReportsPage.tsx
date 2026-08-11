@@ -18,6 +18,7 @@ import {
   CalendarCheck,
   Download,
   FileSpreadsheet,
+  PieChart,
   Play,
   ShieldAlert,
   ShieldCheck,
@@ -30,6 +31,7 @@ import { useCollection } from '@/lib/db';
 import { runPayroll } from '@/lib/payrollEngine';
 import { useAuth, type AuthContextValue } from '@/lib/useAuth';
 import type { AuthRole } from '@/lib/auth';
+import type { DepartmentProfile } from '@/lib/orgChart';
 import { cn, monthKey } from '@/lib/utils';
 import type {
   AttendanceRecord,
@@ -62,14 +64,17 @@ import {
 import {
   buildAttendanceReport,
   buildComplianceReport,
+  buildDeptCostRollup,
   buildHeadcountReport,
   buildLeaveLiabilityReport,
   buildPayrollRegisterReport,
   type BuiltReport,
+  type DeptCostRow,
 } from './reportBuilders';
 import { downloadCsv } from '@/lib/csv';
 import { reportCsv } from './csv';
 import ReportPreview from './ReportPreview';
+import DeptCostChart from './DeptCostChart';
 
 /**
  * useAuth with a fallback for the pre-integration window: AuthProvider is
@@ -87,7 +92,7 @@ function useReportsAuth(): AuthContextValue | null {
   }
 }
 
-type ReportId = 'headcount' | 'attendance' | 'leave' | 'payroll' | 'compliance';
+type ReportId = 'headcount' | 'attendance' | 'leave' | 'payroll' | 'dept-cost' | 'compliance';
 
 interface ReportMeta {
   id: ReportId;
@@ -125,6 +130,13 @@ const REPORT_META: ReportMeta[] = [
     needsMonth: true,
   },
   {
+    id: 'dept-cost',
+    title: 'Payroll cost by department & cost centre',
+    description: 'Employer cost rollup per department with cost-centre codes (finalized runs).',
+    icon: PieChart,
+    needsMonth: true,
+  },
+  {
     id: 'compliance',
     title: 'Statutory compliance',
     description: 'Remittance deadlines, EA form readiness, wage & OT-cap checks.',
@@ -146,6 +158,7 @@ export default function ReportsPage() {
   const { items: payslips } = useCollection<Payslip>('payslips');
   const { items: runs } = useCollection<PayrollRun>('payrollRuns');
   const { items: settings } = useCollection<Settings>('settings');
+  const { items: deptProfiles } = useCollection<DepartmentProfile>('departmentProfiles');
 
   const [selected, setSelected] = useState<ReportId>('headcount');
   const [month, setMonth] = useState(monthKey());
@@ -180,9 +193,12 @@ export default function ReportsPage() {
     [payslips, scopeByEmployee],
   );
 
-  /** Payroll register + statutory compliance are Admin/HR-only. */
+  /** Payroll register, dept cost rollup + statutory compliance are Admin/HR-only. */
   const visibleMeta = useMemo(
-    () => REPORT_META.filter((m) => (m.id !== 'payroll' && m.id !== 'compliance') || isStaffRole),
+    () =>
+      REPORT_META.filter(
+        (m) => (m.id !== 'payroll' && m.id !== 'dept-cost' && m.id !== 'compliance') || isStaffRole,
+      ),
     [isStaffRole],
   );
 
@@ -214,12 +230,14 @@ export default function ReportsPage() {
         return buildLeaveLiabilityReport(new Date().getFullYear(), scopedEmployees, departments, scopedLeaveBalances);
       case 'payroll':
         return buildPayrollRegisterReport(month, scopedEmployees, departments, scopedPayslips);
+      case 'dept-cost':
+        return buildDeptCostRollup(month, scopedEmployees, departments, deptProfiles, scopedPayslips, runs);
       case 'compliance':
         return buildComplianceReport({ employees: scopedEmployees, attendance: scopedAttendance, payslips: scopedPayslips, runs, settings, today: new Date() });
       default:
         return buildHeadcountReport(scopedEmployees, departments);
     }
-  }, [month, scopedEmployees, departments, scopedAttendance, shifts, scopedLeaveBalances, scopedPayslips, runs, settings]);
+  }, [month, scopedEmployees, departments, deptProfiles, scopedAttendance, shifts, scopedLeaveBalances, scopedPayslips, runs, settings]);
 
   const report = useMemo(() => buildById(selected), [selected, buildById]);
 
@@ -421,7 +439,12 @@ export default function ReportsPage() {
               </EmptyHeader>
             </Empty>
           ) : (
-            <ReportPreview report={report} />
+            <>
+              {selected === 'dept-cost' && (
+                <DeptCostChart rows={report.rows as DeptCostRow[]} />
+              )}
+              <ReportPreview report={report} />
+            </>
           )}
           {report.note && <p className="text-xs text-muted-foreground">{report.note}</p>}
         </CardContent>

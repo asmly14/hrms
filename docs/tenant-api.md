@@ -13,6 +13,7 @@ This document is the contract for UI agents building against the tenant layer
 | `myhrms:activeTenant` | active companyId, or `__system__` (SuperAdmin system view) | global |
 | `myhrms:holidays` | holiday admin overrides | **global** (law is national) |
 | `myhrms:migrated:v2` | legacy single-tenant → multi-tenant migration flag | global |
+| `myhrms:system:audit` | `SystemAuditEntry[]` — GLOBAL system stream: tenant-deletion tombstones + SuperAdmin impersonation enter/exit events | **global** |
 | `myhrms:t:<companyId>:seeded:v1` | per-tenant seed flag | per tenant |
 | `hrms.users` / `hrms.session` | mock-auth account directory / session | **global** |
 
@@ -103,8 +104,13 @@ const {
   activeCompanyId,  // string | null (null = SuperAdmin system view)
   activeCompany,    // Company | null
   isSystemView,     // boolean
-  setActiveCompany, // (companyId) => void — enter a company (seeds it on first entry)
-  leaveCompany,     // () => void — SuperAdmin only: back to system view
+  trialStatus,      // TrialStatus | null — db.trialStatusOf(activeCompany);
+                    // expired trials block company users at login
+  setActiveCompany, // (companyId) => void — enter a company (seeds it on first entry);
+                    // SuperAdmin entries log 'superadmin.enter_company' to the
+                    // GLOBAL system audit (impersonation trail)
+  leaveCompany,     // () => void — SuperAdmin only: back to system view;
+                    // logs 'superadmin.exit_company'
   refreshCompanies, // () => void — re-read the directory after create/update
 } = useTenant();
 ```
@@ -113,6 +119,9 @@ const {
   `companyId`; `setActiveCompany` / `leaveCompany` are guarded no-ops for them.
 - SuperAdmin enters any company with `setActiveCompany(id)`; every page then
   scopes to it automatically. `leaveCompany()` returns to the system view.
+- **Impersonation audit (§7):** enter/exit writes go through
+  `auth.auditImpersonation()`, which re-checks the SuperAdmin session — regular
+  sessions cannot forge trail entries even by calling it directly.
 
 Low-level equivalents in `lib/db.ts` (non-React):
 `getActiveTenantId()`, `setActiveTenantId(id | null)`, `subscribeTenant(fn)`.
@@ -124,9 +133,27 @@ getCompanies(): Company[]
 saveCompanies(list): void          // notifies tenant subscribers
 getCompany(id): Company | undefined
 upsertCompany(company): Company    // insert-or-update by id
+removeCompany(id, actorName?): RemoveCompanyReport | null
+                                   // PDPA erasure — purges EVERY key under
+                                   // myhrms:t:<id>: (registry + sub-keys +
+                                   // page-local keys + seed flag), removes the
+                                   // directory record, removes the company's
+                                   // hrms.users accounts (SuperAdmin exempt),
+                                   // drops a session pinned to the tenant,
+                                   // resets the active tenant if it was active,
+                                   // and writes a GLOBAL tombstone to
+                                   // myhrms:system:audit. null = unknown id.
 getActiveCompany(): Company | undefined
 nextEmployeeNo(companyId): string  // e.g. 'ASM0031' — applies
                                    // config.numberFormats.employeeIdPrefix
+trialStatusOf(company, now?): TrialStatus
+                                   // { isTrial, trialEndsAt, daysLeft, expired } —
+                                   // pure; expired only when status==='trial'
+                                   // AND trialEndsAt is a valid past date
+logSystemAudit(entry): void        // GLOBAL stream append (capped at
+                                   // MAX_AUDIT_ENTRIES, oldest dropped)
+getSystemAudit(): SystemAuditEntry[]
+SYSTEM_AUDIT_KEY                   // 'myhrms:system:audit'
 seedTenantIfEmpty(companyId, force?): Promise<void>  // per-tenant seeding (idempotent);
                                                      // await — resolves after writes land
 seedIfEmpty(force?): Promise<void>                   // seeds ALL demo tenants (awaited)
@@ -138,7 +165,8 @@ importTenantData(data, tenantId?, mode): ImportReport
                                            // merge (by id) | replace; unknown keys
                                            // skipped & reported
 MAX_AUDIT_ENTRIES = 2000                   // per-tenant audit cap — logAudit trims
-                                           // oldest entries on append
+                                           // oldest entries on append (the system
+                                           // stream uses the same cap)
 ```
 
 Seeding is **awaitable** (P1 seed-race fix): `seedTenantIfEmpty` /
@@ -171,6 +199,9 @@ interface Company {
   id: string; code: string; name: string; regNo: string; hqState: StateCode;
   status: 'active' | 'suspended' | 'trial';
   plan: 'free' | 'pro' | 'enterprise';
+  trialEndsAt?: string;                           // ISO — trial clock; company users
+                                                  // are blocked at login once past
+                                                  // (absent = open, non-expiring trial)
   createdAt: string;                              // ISO datetime
   branding: { logoText: string; accentColor: string };
   config: CompanyConfig;
@@ -208,6 +239,14 @@ employees.
   SuperAdmin scopes like Admin/HR (unrestricted) in `scopeByEmployee` & co.
 - AppRole consumers map `SuperAdmin → Admin` (nav/route guards) — done in
   `AppLayout.useEffectiveRole` and `pages/leave/useAuthScope`.
+- **Login tenant gates (checked only AFTER credentials verify — never leaked
+  to bad passwords):** users of a `suspended` company are rejected, and users
+  of an **expired-trial** company (`trialStatusOf(company).expired`) are
+  rejected with a "trial expired — contact support" message. SuperAdmin
+  (`companyId: null`) is never blocked.
+- `auditImpersonation('enter' | 'exit', companyId)` — session-guarded writer
+  for the impersonation trail (no-op for non-SuperAdmin sessions or unknown
+  companies); called by `TenantProvider` on enter/exit.
 
 ### Demo accounts (`seedUsers()`)
 
@@ -253,3 +292,63 @@ leftover legacy keys; re-runs are no-ops. The loop iterates the full
 registry (§1a), so the legacy global rotations key
 (`myhrms:attendance:rotations`) is covered too — alongside the attendance
 module's own idempotent migration in `pages/attendance/model.ts`.
+
+## 7. Tenant lifecycle (deletion · trial clock · impersonation trail)
+
+Closes the audit-multitenant §2 lifecycle gaps (P1-3 deletion, §2.4 toothless
+trial, §4.2 missing impersonation audit).
+
+### 7a. Tenant deletion — PDPA erasure
+
+`db.removeCompany(companyId, actorName?)` is the erasure path. It purges by
+**prefix scan** (`myhrms:t:<companyId>:`), not by registry iteration, so every
+tenant-owned key is removed — all 31 registry collections, sub-keys
+(`attendance:rotations`), page-local keys (`claims:actingAs`) and the
+per-tenant seed flag — then:
+
+1. removes the `Company` from the global directory (`myhrms:companies`);
+2. removes the company's accounts from `hrms.users` (SuperAdmin,
+   `companyId: null`, is structurally exempt);
+3. drops `hrms.session` when it is pinned to the deleted company;
+4. resets the active-tenant pointer to the system view when the deleted
+   company was active (no later write can resurrect the purged namespace);
+5. appends a **global tombstone** (actor, company name, timestamp, key count)
+   to `myhrms:system:audit` — the only surviving trace of the tenant.
+
+Access control lives at the call site: the SuperAdmin console → Companies →
+Edit dialog → **Danger zone**, with a type-the-company-name confirm
+(`CompaniesSection.deleteCompany`). When the deleted company was the active
+tenant the console calls `leaveCompany()` first (so the impersonation-exit
+event still resolves the company name), then toasts and navigates back to
+`/superadmin`.
+
+### 7b. Trial clock
+
+- `Company.trialEndsAt?: string` (ISO, additive). `db.trialStatusOf(company)`
+  → `{ isTrial, trialEndsAt, daysLeft, expired }`; a trial with no clock never
+  expires, and `trialEndsAt` is ignored for non-trial statuses.
+- **Login gate** (`auth.login`, same post-credential pattern as the suspend
+  check): expired-trial company users get "The trial for ‹name› has expired.
+  Please contact support…". SuperAdmin is never blocked.
+- The create-company wizard auto-sets `trialEndsAt = now + 30 days` (new
+  tenants start on trial); the SuperAdmin Edit dialog exposes a date input
+  (empty = open trial).
+- Console surfaces: an amber **"Trial expired"** badge in the Companies
+  directory (live trials show "Nd left"), and an amber **TrialExpiredBanner**
+  inside the app shell while the SuperAdmin works inside an expired tenant.
+
+### 7c. Impersonation audit trail + system stream
+
+`myhrms:system:audit` (`SystemAuditEntry[]`, capped at `MAX_AUDIT_ENTRIES`)
+is the GLOBAL, never-namespaced audit stream. Writers:
+
+| Event | Writer |
+|---|---|
+| `company.delete` | `db.removeCompany` (tombstone) |
+| `superadmin.enter_company` | `TenantProvider.setActiveCompany` → `auth.auditImpersonation` |
+| `superadmin.exit_company` | `TenantProvider.leaveCompany` → `auth.auditImpersonation` |
+
+The SuperAdmin console → Activity section merges this stream with every
+tenant's own audit trail (system rows carry a **SYSTEM** badge); a dedicated
+"System events" filter isolates it. The stream is deliberately outside any
+tenant: tenant admins cannot edit it, and it survives tenant deletion.

@@ -7,12 +7,12 @@
 import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  Ban, Building2, LogIn, Pencil, Plus, RotateCcw, Search,
+  AlertTriangle, Ban, Building2, LogIn, Pencil, Plus, RotateCcw, Search, Trash2,
 } from 'lucide-react';
 import { useAuth } from '@/lib/useAuth';
 import { toast } from 'sonner';
 import { useTenant } from '@/lib/useTenant';
-import { logAudit, upsertCompany } from '@/lib/db';
+import { logAudit, removeCompany, trialStatusOf, upsertCompany } from '@/lib/db';
 import { states } from '@/lib/holidays';
 import { fmtDate } from '@/lib/utils';
 import type { Company, CompanyPlan, CompanyStatus, StateCode } from '@/lib/types';
@@ -20,6 +20,7 @@ import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
@@ -43,16 +44,23 @@ function EditCompanyDialog(props: {
   actor: string;
   onClose: () => void;
   onSaved: () => void;
+  /** Danger-zone delete: parent performs removeCompany + navigation. */
+  onDelete: () => void;
 }) {
-  const { company, actor, onClose, onSaved } = props;
+  const { company, actor, onClose, onSaved, onDelete } = props;
   const [name, setName] = useState(company.name);
   const [regNo, setRegNo] = useState(company.regNo);
   const [hqState, setHqState] = useState<StateCode>(company.hqState);
   const [plan, setPlan] = useState<CompanyPlan>(company.plan);
   const [status, setStatus] = useState<CompanyStatus>(company.status);
+  // Trial clock as a date input value ('' = open trial, no expiry).
+  const [trialEnds, setTrialEnds] = useState(company.trialEndsAt?.slice(0, 10) ?? '');
   const [logoText, setLogoText] = useState(company.branding.logoText);
   const [accentColor, setAccentColor] = useState(company.branding.accentColor);
   const [error, setError] = useState<string | null>(null);
+  // Danger zone: armed → type-the-company-name confirm before purging.
+  const [deleteArmed, setDeleteArmed] = useState(false);
+  const [deleteConfirmText, setDeleteConfirmText] = useState('');
 
   const save = () => {
     if (name.trim().length < 2) {
@@ -63,6 +71,18 @@ function EditCompanyDialog(props: {
       setError('Accent color must be a hex value like #b45309.');
       return;
     }
+    if (status === 'trial' && trialEnds && Number.isNaN(new Date(`${trialEnds}T00:00:00`).getTime())) {
+      setError('Trial end date is not a valid date.');
+      return;
+    }
+    // Trial clock is only meaningful for trial tenants; clearing the input
+    // removes the clock (open trial). Non-trial statuses keep any stored value.
+    const nextTrialEndsAt =
+      status === 'trial'
+        ? trialEnds
+          ? new Date(`${trialEnds}T23:59:59.999Z`).toISOString()
+          : undefined
+        : company.trialEndsAt;
     const next: Company = {
       ...company,
       name: name.trim(),
@@ -70,6 +90,7 @@ function EditCompanyDialog(props: {
       hqState,
       plan,
       status,
+      trialEndsAt: nextTrialEndsAt,
       branding: {
         logoText: logoText.trim() || company.code,
         accentColor: accentColor.trim(),
@@ -81,6 +102,7 @@ function EditCompanyDialog(props: {
     if (next.hqState !== company.hqState) changes.push('hqState');
     if (next.plan !== company.plan) changes.push('plan');
     if (next.status !== company.status) changes.push('status');
+    if (next.trialEndsAt !== company.trialEndsAt) changes.push('trialEndsAt');
     if (next.branding.logoText !== company.branding.logoText) changes.push('logoText');
     if (next.branding.accentColor !== company.branding.accentColor) changes.push('accentColor');
     upsertCompany(next);
@@ -161,6 +183,21 @@ function EditCompanyDialog(props: {
               </SelectContent>
             </Select>
           </div>
+          {status === 'trial' ? (
+            <div className="space-y-1.5 sm:col-span-2">
+              <Label htmlFor="sa-edit-trialends">Trial ends on</Label>
+              <Input
+                id="sa-edit-trialends"
+                type="date"
+                value={trialEnds}
+                onChange={(e) => setTrialEnds(e.target.value)}
+              />
+              <p className="text-xs text-muted-foreground">
+                Company users are blocked at login after this date (SuperAdmin access is never
+                blocked). Leave empty for an open, non-expiring trial.
+              </p>
+            </div>
+          ) : null}
           <div className="space-y-1.5">
             <Label htmlFor="sa-edit-logo">Logo text</Label>
             <Input
@@ -192,6 +229,63 @@ function EditCompanyDialog(props: {
 
         {error ? <p className="text-sm text-red-600 dark:text-red-400">{error}</p> : null}
 
+        {/* Danger zone — PDPA erasure (tenant deletion). Type-the-name confirm
+            before db.removeCompany purges every tenant key, the directory
+            record and the company's user accounts. */}
+        <div className="space-y-3 rounded-lg border border-red-200 bg-red-50/60 p-4 dark:border-red-900 dark:bg-red-950/20">
+          <p className="flex items-center gap-2 text-sm font-medium text-red-700 dark:text-red-400">
+            <AlertTriangle className="h-4 w-4" />
+            Danger zone
+          </p>
+          {!deleteArmed ? (
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-xs text-muted-foreground">
+                Permanently delete this company and ALL of its data (PDPA erasure). This cannot be
+                undone.
+              </p>
+              <Button
+                variant="destructive"
+                size="sm"
+                onClick={() => {
+                  setDeleteArmed(true);
+                  setDeleteConfirmText('');
+                }}
+              >
+                <Trash2 className="mr-1.5 h-4 w-4" />
+                Delete company…
+              </Button>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              <p className="text-xs text-red-700 dark:text-red-400">
+                This purges every storage key under <code>myhrms:t:{company.id}:</code>, removes the
+                company from the directory and deletes its user accounts. A tombstone is written to
+                the global system audit. Type <strong>{company.name}</strong> to confirm.
+              </p>
+              <Input
+                aria-label="Type the company name to confirm deletion"
+                placeholder={company.name}
+                value={deleteConfirmText}
+                onChange={(e) => setDeleteConfirmText(e.target.value)}
+              />
+              <div className="flex justify-end gap-2">
+                <Button variant="outline" size="sm" onClick={() => setDeleteArmed(false)}>
+                  Cancel
+                </Button>
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  disabled={deleteConfirmText.trim() !== company.name}
+                  onClick={onDelete}
+                >
+                  <Trash2 className="mr-1.5 h-4 w-4" />
+                  Delete permanently
+                </Button>
+              </div>
+            </div>
+          )}
+        </div>
+
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>
             Cancel
@@ -206,7 +300,7 @@ function EditCompanyDialog(props: {
 // ── Directory ────────────────────────────────────────────────────────────────
 
 export default function CompaniesSection() {
-  const { companies, setActiveCompany, refreshCompanies } = useTenant();
+  const { companies, activeCompanyId, setActiveCompany, leaveCompany, refreshCompanies } = useTenant();
   const { user } = useAuth();
   const navigate = useNavigate();
 
@@ -274,6 +368,30 @@ export default function CompaniesSection() {
       });
     }
     setConfirm(null);
+  };
+
+  /**
+   * Danger-zone delete (PDPA erasure). SuperAdmin may delete from anywhere —
+   * when the purged company was the ACTIVE tenant, leave it first (logs the
+   * impersonation exit while the record still exists) and drop to the system
+   * view so no page write can resurrect keys under the purged namespace.
+   */
+  const deleteCompany = (company: Company) => {
+    const wasActive = activeCompanyId === company.id;
+    if (wasActive) leaveCompany();
+    const report = removeCompany(company.id, actor);
+    refreshCompanies();
+    setEditTarget(null);
+    if (!report) {
+      toast.error(`Could not delete ${company.name}`, {
+        description: 'The company record was not found — nothing was purged.',
+      });
+      return;
+    }
+    toast.success(`Company “${report.companyName}” deleted`, {
+      description: `Purged ${report.removedKeys} storage key${report.removedKeys === 1 ? '' : 's'} and ${report.removedUsers} user account${report.removedUsers === 1 ? '' : 's'}. Tombstone written to the system audit.`,
+    });
+    if (wasActive) navigate('/superadmin');
   };
 
   return (
@@ -369,7 +487,27 @@ export default function CompaniesSection() {
                       <PlanBadge plan={c.plan} />
                     </TableCell>
                     <TableCell>
-                      <StatusBadge status={c.status} />
+                      {(() => {
+                        const ts = trialStatusOf(c);
+                        return (
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <StatusBadge status={c.status} />
+                            {ts.expired ? (
+                              <Badge
+                                variant="outline"
+                                className="border-transparent bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300"
+                                title={`Trial ended ${fmtDate(ts.trialEndsAt!)} — company users are blocked at login`}
+                              >
+                                Trial expired
+                              </Badge>
+                            ) : ts.isTrial && ts.daysLeft !== null ? (
+                              <span className="text-xs text-muted-foreground">
+                                {ts.daysLeft}d left
+                              </span>
+                            ) : null}
+                          </div>
+                        );
+                      })()}
                     </TableCell>
                     <TableCell className="text-right tabular-nums">
                       {headcounts.get(c.id) ?? 0}
@@ -434,6 +572,7 @@ export default function CompaniesSection() {
             refreshCompanies();
             setEditTarget(null);
           }}
+          onDelete={() => deleteCompany(editTarget)}
         />
       )}
 

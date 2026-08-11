@@ -5,6 +5,7 @@
  */
 import { createContext, useContext } from 'react';
 import type { Company } from './types';
+import type { TrialStatus } from './db';
 
 export interface TenantContextValue {
   /** All companies in the global directory. */
@@ -16,11 +17,22 @@ export interface TenantContextValue {
   /** True when a SuperAdmin session has no company selected. */
   isSystemView: boolean;
   /**
+   * Trial state of the ACTIVE company (db.trialStatusOf), null in system
+   * view. `expired` trials block company users at login and are flagged in
+   * the SuperAdmin console.
+   */
+  trialStatus: TrialStatus | null;
+  /**
    * Enter a company. SuperAdmin may enter any company; regular users can only
    * (re)select their own. Seeds the tenant's demo data on first entry.
+   * SuperAdmin entries write 'superadmin.enter_company' to the GLOBAL system
+   * audit (impersonation trail).
    */
   setActiveCompany: (companyId: string) => void;
-  /** SuperAdmin: leave the current company and return to the system view. */
+  /**
+   * SuperAdmin: leave the current company and return to the system view.
+   * Writes 'superadmin.exit_company' to the GLOBAL system audit.
+   */
   leaveCompany: () => void;
   /** Re-read the company directory from storage (after create/update). */
   refreshCompanies: () => void;

@@ -190,6 +190,10 @@ export default function CreateCompanyWizard(props: {
     const actor = user?.username ? `${user.username} (SuperAdmin)` : 'SuperAdmin';
     const code = data.code.trim().toUpperCase();
     const id = generateCompanyId(code, companies);
+    // New tenants start on trial — and the trial has teeth: the clock starts
+    // now (+30 days), after which company users are blocked at login until
+    // the plan/status is upgraded (db.trialStatusOf, lib/auth.ts gate).
+    const trialEndsAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
     const company: Company = {
       id,
       code,
@@ -198,6 +202,7 @@ export default function CreateCompanyWizard(props: {
       hqState: data.hqState,
       status: 'trial', // new tenants start on trial
       plan: data.plan,
+      trialEndsAt,
       createdAt: new Date().toISOString(),
       branding: { logoText: code, accentColor: '#b45309' },
       config: {
@@ -228,7 +233,7 @@ export default function CreateCompanyWizard(props: {
         action: 'company.create',
         entity: 'companies',
         entityId: id,
-        detail: `${company.name} (${code}) · plan=${company.plan} · admin=${data.username.trim()}`,
+        detail: `${company.name} (${code}) · plan=${company.plan} · admin=${data.username.trim()} · trial ends ${trialEndsAt.slice(0, 10)}`,
       },
       id,
     );
@@ -278,7 +283,8 @@ export default function CreateCompanyWizard(props: {
                 Company created
               </DialogTitle>
               <DialogDescription>
-                {created.company.name} ({created.company.code}) is registered as a trial tenant.
+                {created.company.name} ({created.company.code}) is registered as a trial tenant
+                (30-day clock, ends {created.company.trialEndsAt?.slice(0, 10) ?? '—'}).
                 It starts EMPTY — no demo data was seeded. The first entry via “Enter company”
                 initialises blank collections.
               </DialogDescription>
@@ -569,6 +575,9 @@ export default function CreateCompanyWizard(props: {
                       <Badge variant="outline" className="border-transparent bg-yellow-100 text-yellow-800 dark:bg-yellow-950 dark:text-yellow-300">
                         Trial
                       </Badge>
+                      <span className="text-xs font-normal text-muted-foreground">
+                        30-day clock, starts at creation
+                      </span>
                     </dd>
                   </div>
                   <div>

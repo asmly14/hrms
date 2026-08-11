@@ -31,10 +31,13 @@ const ShiftsPage = lazy(() => import('@/pages/attendance/ShiftsPage'));
 const LeavePage = lazy(() => import('@/pages/leave/LeavePage'));
 const HolidaysPage = lazy(() => import('@/pages/holidays/HolidaysPage'));
 const ClaimsPage = lazy(() => import('@/pages/claims/ClaimsPage'));
+const ApprovalsPage = lazy(() => import('@/pages/approvals/ApprovalsPage'));
 const PayrollHome = lazy(() => import('@/pages/payroll/PayrollHome'));
 const RunDetail = lazy(() => import('@/pages/payroll/RunDetail'));
 const PayslipPage = lazy(() => import('@/pages/payroll/PayslipPage'));
 const MyPayslipsPage = lazy(() => import('@/pages/payroll/MyPayslipsPage'));
+const YearEndPack = lazy(() => import('@/pages/payroll/YearEndPack'));
+const BatchPayslips = lazy(() => import('@/pages/payroll/BatchPayslips'));
 const KpiPage = lazy(() => import('@/pages/kpi'));
 const ReviewCycle = lazy(() => import('@/pages/kpi/ReviewCycle'));
 const SalaryInsightsPage = lazy(() => import('@/pages/insights/SalaryInsightsPage'));
@@ -88,6 +91,11 @@ export interface RouteDef {
  */
 const routeRegistry: RouteDef[] = [
   { path: '/', title: 'Dashboard', element: <DashboardPage /> },
+  // Unified approvals inbox — no role gate on purpose: nav hides it from
+  // Employees, but a direct visit shows them their own pending requests
+  // (read-only); approver roles get the full decision queues. Spans the
+  // leave/claims/attendance modules, so no single-module gate either.
+  { path: '/approvals', title: 'Approvals', element: <ApprovalsPage /> },
   { path: '/employees', title: 'Employees', element: <EmployeesPage />, roles: ['Admin', 'HR'] },
   { path: '/employees/:id', title: 'Employee Detail', element: <EmployeeDetailPage /> },
   // All roles may open the route — the records page self-gates (Employee →
@@ -107,6 +115,8 @@ const routeRegistry: RouteDef[] = [
   { path: '/payroll', title: 'Payroll', element: <PayrollHome />, roles: ['Admin', 'HR'], module: 'payroll' },
   { path: '/payroll/runs/:id', title: 'Payroll Run', element: <RunDetail />, roles: ['Admin', 'HR'], module: 'payroll' },
   { path: '/payroll/payslip/:id', title: 'Payslip', element: <PayslipPage />, module: 'payroll' },
+  { path: '/payroll/year-end', title: 'Year-End Pack', element: <YearEndPack />, roles: ['Admin', 'HR'], module: 'payroll' },
+  { path: '/payroll/batch-payslips', title: 'Batch Payslips', element: <BatchPayslips />, roles: ['Admin', 'HR'], module: 'payroll' },
   // Employee self-service: own payslips only (page filters by the session's
   // linked employeeId, finalized runs). Open to every authenticated role.
   { path: '/my-payslips', title: 'My Payslips', element: <MyPayslipsPage />, module: 'payroll' },

@@ -4,7 +4,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
-  AlertTriangle, ChevronRight, FileText, Landmark, Play, RefreshCw, Undo2, Users, Wallet,
+  AlertTriangle, CalendarClock, ChevronRight, FileText, Landmark, Play, RefreshCw, Send,
+  Undo2, Users, Wallet,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { useCollection } from '@/lib/db';
@@ -280,6 +281,33 @@ export default function PayrollHome() {
               </div>
             </>
           )}
+        </CardContent>
+      </Card>
+
+      {/* Year-end & distribution shortcuts (P2 year-end wave). */}
+      <Card className="rounded-xl">
+        <CardContent className="flex flex-wrap items-center justify-between gap-4 pt-6">
+          <div className="space-y-1">
+            <p className="flex items-center gap-2 text-sm font-semibold">
+              <CalendarClock className="h-4 w-4 text-amber-600" /> Year-end & payslip distribution
+            </p>
+            <p className="max-w-xl text-xs text-muted-foreground">
+              Form E / CP8D / CP21 annual LHDN filings from finalized runs, plus batch payslip
+              PDF export and per-employee distribution tracking.
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button variant="outline" size="sm" asChild>
+              <Link to="/payroll/year-end">
+                <FileText className="h-4 w-4" /> Year-end pack
+              </Link>
+            </Button>
+            <Button variant="outline" size="sm" asChild>
+              <Link to="/payroll/batch-payslips">
+                <Send className="h-4 w-4" /> Batch payslips
+              </Link>
+            </Button>
+          </div>
         </CardContent>
       </Card>
 

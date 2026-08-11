@@ -115,6 +115,13 @@ const GLOBAL_COLLECTIONS: ReadonlySet<string> = new Set<CollectionName>(['holida
 export const COMPANIES_KEY = `${PREFIX}companies`;
 const ACTIVE_TENANT_KEY = `${PREFIX}activeTenant`;
 const MIGRATION_FLAG = `${PREFIX}migrated:v2`;
+/**
+ * GLOBAL system audit stream (tenant-lifecycle + impersonation events).
+ * Unlike the per-tenant `audit` collection, this key is NEVER namespaced and
+ * is never purged by removeCompany — tombstones for deleted tenants live
+ * here precisely because their tenant trail is gone.
+ */
+export const SYSTEM_AUDIT_KEY = `${PREFIX}system:audit`;
 
 /** Sentinel stored in ACTIVE_TENANT_KEY for the SuperAdmin "system view". */
 const SYSTEM_VIEW = '__system__';
@@ -323,6 +330,59 @@ export function logAudit(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// System audit (GLOBAL — lifecycle tombstones + SuperAdmin impersonation)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * One entry in the GLOBAL system audit stream (`myhrms:system:audit`).
+ * Kept deliberately close to AuditLog, but adds `companyId`/`companyName`
+ * because these events describe cross-tenant actions (tenant deletion,
+ * impersonation) that do not belong inside any single tenant's trail.
+ */
+export interface SystemAuditEntry {
+  id: string;
+  /** ISO datetime. */
+  at: string;
+  actorName: string;
+  /** e.g. 'company.delete', 'superadmin.enter_company', 'superadmin.exit_company'. */
+  action: string;
+  companyId?: string;
+  companyName?: string;
+  detail?: string;
+}
+
+/**
+ * Append an entry to the GLOBAL system audit (never tenant-namespaced).
+ * Capped at the newest MAX_AUDIT_ENTRIES, same rotation policy as the
+ * per-tenant log. Used for tenant-deletion tombstones (removeCompany) and
+ * SuperAdmin impersonation enter/exit events (tenantContext).
+ */
+export function logSystemAudit(
+  entry: Omit<SystemAuditEntry, 'id' | 'at'> & { at?: string },
+): void {
+  if (typeof localStorage === 'undefined') return;
+  const log: SystemAuditEntry = { ...entry, id: uid(), at: entry.at ?? new Date().toISOString() };
+  try {
+    const raw = localStorage.getItem(SYSTEM_AUDIT_KEY);
+    const all = [...(raw ? (JSON.parse(raw) as SystemAuditEntry[]) : []), log];
+    const trimmed = all.length > MAX_AUDIT_ENTRIES ? all.slice(all.length - MAX_AUDIT_ENTRIES) : all;
+    localStorage.setItem(SYSTEM_AUDIT_KEY, JSON.stringify(trimmed));
+  } catch {
+    /* storage unavailable — non-fatal in demo mode */
+  }
+}
+
+/** Read the GLOBAL system audit stream (oldest first). */
+export function getSystemAudit(): SystemAuditEntry[] {
+  try {
+    const raw = localStorage.getItem(SYSTEM_AUDIT_KEY);
+    return raw ? (JSON.parse(raw) as SystemAuditEntry[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Registry-wide export / import (Settings → Data management)
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -440,6 +500,154 @@ export function upsertCompany(company: Company): Company {
 export function getActiveCompany(): Company | undefined {
   const id = getActiveTenantId();
   return id ? getCompany(id) : undefined;
+}
+
+// ── Trial clock ──────────────────────────────────────────────────────────────
+
+/** Resolved trial state for a company (see Company.trialEndsAt). */
+export interface TrialStatus {
+  /** True when company.status === 'trial'. */
+  isTrial: boolean;
+  /** The configured trial end (ISO), or null when the trial has no clock. */
+  trialEndsAt: string | null;
+  /**
+   * Whole days remaining (0 once expired). Null when the trial has no clock
+   * or the company is not on trial.
+   */
+  daysLeft: number | null;
+  /**
+   * True only for a trial company whose trialEndsAt is in the past — these
+   * tenants are blocked at login (lib/auth.ts) and flagged in the console.
+   */
+  expired: boolean;
+}
+
+const MS_PER_DAY = 86_400_000;
+
+/**
+ * Pure trial-state resolver. `now` is injectable for tests.
+ * A non-trial company is never expired; a trial without trialEndsAt never
+ * expires (open trial — the pre-clock behaviour).
+ */
+export function trialStatusOf(
+  company: Pick<Company, 'status' | 'trialEndsAt'>,
+  now: Date = new Date(),
+): TrialStatus {
+  const isTrial = company.status === 'trial';
+  const trialEndsAt = company.trialEndsAt ?? null;
+  if (!isTrial || !trialEndsAt) {
+    return { isTrial, trialEndsAt, daysLeft: null, expired: false };
+  }
+  const end = new Date(trialEndsAt).getTime();
+  if (Number.isNaN(end)) {
+    return { isTrial, trialEndsAt, daysLeft: null, expired: false };
+  }
+  const expired = end < now.getTime();
+  const daysLeft = expired ? 0 : Math.ceil((end - now.getTime()) / MS_PER_DAY);
+  return { isTrial, trialEndsAt, daysLeft, expired };
+}
+
+// ── Tenant deletion (PDPA erasure) ──────────────────────────────────────────
+
+/** What removeCompany purged (returned for the confirm toast / tombstone). */
+export interface RemoveCompanyReport {
+  companyId: string;
+  companyName: string;
+  /** localStorage keys removed under `myhrms:t:<companyId>:` (all collections,
+   *  sub-keys like attendance:rotations, page-local keys, the seed flag). */
+  removedKeys: number;
+  /** Mock-auth accounts removed from hrms.users (SuperAdmin is never touched). */
+  removedUsers: number;
+}
+
+/**
+ * DELETE a tenant — the PDPA erasure path (audit-multitenant §2.2/§6 P1-3).
+ *
+ * Purges, in order:
+ *  1. EVERY localStorage key under the tenant prefix `myhrms:t:<companyId>:`
+ *     — all registry collections, sub-keys (attendance:rotations), page-local
+ *     keys (claims:actingAs) and the per-tenant seed flag. Prefix scanning
+ *     (not registry iteration) guarantees nothing tenant-owned survives.
+ *  2. The Company record from the global directory (myhrms:companies).
+ *  3. The company's accounts from the global hrms.users directory
+ *     (SuperAdmin, companyId null, is structurally exempt).
+ *  4. The active session, if it belongs to the deleted company.
+ *
+ * If the deleted company was the ACTIVE tenant, the active-tenant pointer is
+ * reset to the system view so no later write can silently resurrect keys
+ * under the purged namespace.
+ *
+ * Finally a GLOBAL tombstone (actor, company name, timestamp, key count) is
+ * appended to `myhrms:system:audit` — the only trace left of the tenant,
+ * which is exactly what PDPA erasure evidence needs.
+ *
+ * Access control lives at the call site (SuperAdmin console only); the db
+ * layer is intentionally session-agnostic. Returns null when the company id
+ * is unknown (nothing written).
+ */
+export function removeCompany(companyId: string, actorName = 'system'): RemoveCompanyReport | null {
+  if (typeof localStorage === 'undefined') return null;
+  const company = getCompany(companyId);
+  if (!company) return null;
+
+  // 1. Purge every tenant-namespaced key (scan, don't iterate the registry —
+  //    sub-keys and page-local keys are not registry members).
+  const tenantPrefix = `${TENANT_PREFIX}${companyId}:`;
+  const doomed: string[] = [];
+  for (let i = 0; i < localStorage.length; i += 1) {
+    const k = localStorage.key(i);
+    if (k && k.startsWith(tenantPrefix)) doomed.push(k);
+  }
+  doomed.forEach((k) => {
+    try {
+      localStorage.removeItem(k);
+    } catch {
+      /* non-fatal */
+    }
+  });
+
+  // 2. Remove from the global directory (notifies tenant subscribers).
+  saveCompanies(getCompanies().filter((c) => c.id !== companyId));
+
+  // 3. Remove the company's mock-auth accounts; SuperAdmin (companyId null)
+  //    and other tenants' accounts are untouched.
+  let removedUsers = 0;
+  try {
+    const raw = localStorage.getItem('hrms.users');
+    if (raw) {
+      const users = JSON.parse(raw) as { companyId: string | null }[];
+      const kept = users.filter((u) => u.companyId !== companyId);
+      removedUsers = users.length - kept.length;
+      localStorage.setItem('hrms.users', JSON.stringify(kept));
+    }
+  } catch {
+    /* non-fatal */
+  }
+
+  // 4. Drop a session pinned to the deleted company.
+  try {
+    const raw = localStorage.getItem('hrms.session');
+    if (raw) {
+      const session = JSON.parse(raw) as { companyId?: string | null };
+      if (session.companyId === companyId) localStorage.removeItem('hrms.session');
+    }
+  } catch {
+    /* non-fatal */
+  }
+
+  // 5. Reset the active-tenant pointer when it targeted the purged company.
+  if (getActiveTenantId() === companyId) setActiveTenantId(null);
+
+  // 6. Global tombstone — the only surviving trace of the tenant.
+  logSystemAudit({
+    actorName,
+    action: 'company.delete',
+    companyId,
+    companyName: company.name,
+    detail: `Tenant purged: ${doomed.length} storage key${doomed.length === 1 ? '' : 's'} and ${removedUsers} user account${removedUsers === 1 ? '' : 's'} removed (PDPA erasure).`,
+  });
+
+  return { companyId, companyName: company.name, removedKeys: doomed.length, removedUsers };
 }
 
 /**

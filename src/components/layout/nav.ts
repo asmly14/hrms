@@ -15,7 +15,7 @@
  */
 import {
   Banknote, Building2, Calendar, CalendarDays, ClipboardList, FileText, Gauge,
-  LayoutDashboard, Network, Receipt, ScrollText, Settings, ShieldCheck,
+  Inbox, LayoutDashboard, Network, Receipt, ScrollText, Settings, ShieldCheck,
   TrendingUp, UserRoundCheck, UserRoundMinus, Users, Wallet, Workflow,
 } from 'lucide-react';
 import type { AppRole } from '@/lib/roleContext';
@@ -35,6 +35,10 @@ export interface NavItem {
 
 export const NAV_ITEMS: NavItem[] = [
   { path: '/', title: 'Dashboard', icon: LayoutDashboard, roles: ['Admin', 'HR', 'Manager', 'Employee'] },
+  // Unified approvals inbox — aggregates leave/claims/OT decision queues.
+  // Approver roles only in nav; Employees opening /approvals directly see
+  // their own pending requests (the route itself is not role-gated).
+  { path: '/approvals', title: 'Approvals', icon: Inbox, roles: ['Admin', 'HR', 'Manager'] },
   { path: '/employees', title: 'Employees', icon: Users, roles: ['Admin', 'HR'] },
   { path: '/contracts', title: 'Contracts', icon: ScrollText, roles: ['Admin', 'HR'] },
   { path: '/org', title: 'Organization', icon: Network, roles: ['Admin', 'HR'] },

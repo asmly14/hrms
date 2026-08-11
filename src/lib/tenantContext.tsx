@@ -23,9 +23,9 @@ import {
 } from 'react';
 import {
   getActiveTenantId, getCompanies, setActiveTenantId, subscribeTenant,
-  seedTenantIfEmpty,
+  seedTenantIfEmpty, trialStatusOf,
 } from './db';
-import { getSession } from './auth';
+import { auditImpersonation, getSession } from './auth';
 import { TenantContext, type TenantContextValue } from './useTenant';
 import type { Company } from './types';
 
@@ -73,6 +73,12 @@ export function TenantProvider({ children }: { children: ReactNode }) {
       console.warn(`[tenant] setActiveCompany('${companyId}') ignored: session is pinned to another company.`);
       return;
     }
+    // Impersonation audit (audit-multitenant §4.2): a SuperAdmin ENTERING a
+    // company is a cross-tenant access event — log it to the global system
+    // audit. Skipped when re-selecting the already-active company.
+    if (sessionIsSuperAdmin() && getActiveTenantId() !== companyId) {
+      auditImpersonation('enter', companyId);
+    }
     seedTenantIfEmpty(companyId); // first entry seeds demo data (idempotent)
     setActiveTenantId(companyId);
   }, []);
@@ -82,6 +88,10 @@ export function TenantProvider({ children }: { children: ReactNode }) {
       console.warn('[tenant] leaveCompany() ignored: only SuperAdmin can enter the system view.');
       return;
     }
+    // Impersonation audit: log the EXIT before clearing the pointer so the
+    // entry still carries the company being left.
+    const current = getActiveTenantId();
+    if (current) auditImpersonation('exit', current);
     setActiveTenantId(null);
   }, []);
 
@@ -94,17 +104,26 @@ export function TenantProvider({ children }: { children: ReactNode }) {
     [companies, activeCompanyId],
   );
 
+  // Trial state of the ACTIVE company (null in system view). Drives the
+  // SuperAdmin trial-expired banner; the login gate resolves it independently
+  // in lib/auth.ts via the same trialStatusOf().
+  const trialStatus = useMemo(
+    () => (activeCompany ? trialStatusOf(activeCompany) : null),
+    [activeCompany],
+  );
+
   const value = useMemo<TenantContextValue>(
     () => ({
       companies,
       activeCompanyId,
       activeCompany,
       isSystemView: activeCompanyId === null,
+      trialStatus,
       setActiveCompany,
       leaveCompany,
       refreshCompanies,
     }),
-    [companies, activeCompanyId, activeCompany, setActiveCompany, leaveCompany, refreshCompanies],
+    [companies, activeCompanyId, activeCompany, trialStatus, setActiveCompany, leaveCompany, refreshCompanies],
   );
 
   return <TenantContext.Provider value={value}>{children}</TenantContext.Provider>;

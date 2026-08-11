@@ -12,6 +12,7 @@ import {
   hourlyFromMonthly,
   orpFromMonthly,
 } from '@/lib/statutory';
+import type { DepartmentProfile } from '@/lib/orgChart';
 import { daysBetween, fmtDate, fmtRM, round2 } from '@/lib/utils';
 import { stateInfo } from '@/lib/holidays';
 import type {
@@ -362,7 +363,112 @@ export function buildPayrollRegisterReport(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 5) Statutory compliance checklist
+// 5) Payroll cost by department & cost centre (finalized runs only)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface DeptCostRow extends ReportRow {
+  department: string;
+  costCenter: string;
+  headcount: number;
+  gross: number;
+  erStatutory: number;
+  hrd: number;
+  claims: number;
+  totalCost: number;
+}
+
+/**
+ * Employer payroll cost rolled up by department with its cost-centre code
+ * (org designer's DepartmentProfile.costCenter). Only payslips of FINALIZED
+ * runs for the month count — draft figures never reach a finance rollup.
+ * Column sum of totalCost equals the finalized run's totalEmployerCost
+ * (asserted in the glExport test suite).
+ */
+export function buildDeptCostRollup(
+  month: string,
+  employees: Employee[],
+  departments: Department[],
+  deptProfiles: DepartmentProfile[],
+  payslips: Payslip[],
+  runs: PayrollRun[],
+): BuiltReport {
+  const finalizedRunIds = new Set(
+    runs.filter((r) => r.monthKey === month && r.status === 'finalized').map((r) => r.id),
+  );
+  const empById = new Map(employees.map((e) => [e.id, e]));
+  const slips = payslips.filter((p) => p.monthKey === month && finalizedRunIds.has(p.runId));
+
+  interface Acc {
+    empIds: Set<string>;
+    gross: number;
+    erStatutory: number;
+    hrd: number;
+    claims: number;
+    totalCost: number;
+  }
+  const zero = (): Acc => ({ empIds: new Set(), gross: 0, erStatutory: 0, hrd: 0, claims: 0, totalCost: 0 });
+  const byDept = new Map<string, Acc>();
+  for (const p of slips) {
+    const deptId = empById.get(p.employeeId)?.departmentId ?? '';
+    const acc = byDept.get(deptId) ?? zero();
+    acc.empIds.add(p.employeeId);
+    acc.gross = round2(acc.gross + p.grossPay);
+    acc.erStatutory = round2(acc.erStatutory + p.epfEmployer + p.socsoEmployer + p.eisEmployer);
+    acc.hrd = round2(acc.hrd + p.hrdLevy);
+    acc.claims = round2(acc.claims + p.claimsTotal);
+    acc.totalCost = round2(acc.totalCost + p.employerCost);
+    byDept.set(deptId, acc);
+  }
+
+  const deptName = (id: string) => departments.find((d) => d.id === id)?.name ?? 'Unassigned';
+  const costCenter = (id: string) => deptProfiles.find((pr) => pr.departmentId === id)?.costCenter ?? '—';
+
+  const rows: DeptCostRow[] = [...byDept.entries()]
+    .sort((a, b) => b[1].totalCost - a[1].totalCost)
+    .map(([deptId, acc]) => ({
+      department: deptName(deptId),
+      costCenter: costCenter(deptId),
+      headcount: acc.empIds.size,
+      gross: acc.gross,
+      erStatutory: acc.erStatutory,
+      hrd: acc.hrd,
+      claims: acc.claims,
+      totalCost: acc.totalCost,
+    }));
+
+  const sum = (f: (r: DeptCostRow) => number) => round2(rows.reduce((s, r) => s + f(r), 0));
+
+  return {
+    id: 'dept-cost',
+    title: 'Payroll cost by department & cost centre',
+    filename: `payroll-cost-by-department-${month}.csv`,
+    columns: [
+      { key: 'department', label: 'Department' },
+      { key: 'costCenter', label: 'Cost centre' },
+      { key: 'headcount', label: 'Headcount', align: 'right', format: 'number' },
+      { key: 'gross', label: 'Gross wages', align: 'right', format: 'money' },
+      { key: 'erStatutory', label: 'Employer EPF/SOCSO/EIS', align: 'right', format: 'money' },
+      { key: 'hrd', label: 'HRD levy', align: 'right', format: 'money' },
+      { key: 'claims', label: 'Claims', align: 'right', format: 'money' },
+      { key: 'totalCost', label: 'Total employer cost', align: 'right', format: 'money' },
+    ],
+    rows,
+    totalRow: {
+      department: `TOTAL (${slips.length} payslips)`,
+      costCenter: '',
+      headcount: sum((r) => r.headcount),
+      gross: sum((r) => r.gross),
+      erStatutory: sum((r) => r.erStatutory),
+      hrd: sum((r) => r.hrd),
+      claims: sum((r) => r.claims),
+      totalCost: sum((r) => r.totalCost),
+    },
+    note: `Finalized payroll run(s) for ${month} only — draft runs are excluded. Cost-centre codes come from the org designer (Organization → department profile). Total employer cost = gross + employer statutory + HRD levy + claims, exactly as the payroll engine books it.`,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 6) Statutory compliance checklist
 // ─────────────────────────────────────────────────────────────────────────────
 
 export interface ComplianceInput {

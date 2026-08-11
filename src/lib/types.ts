@@ -117,6 +117,14 @@ export interface Company {
   hqState: StateCode;
   status: CompanyStatus;
   plan: CompanyPlan;
+  /**
+   * Trial clock (additive, optional). ISO datetime after which a
+   * `status: 'trial'` company is considered EXPIRED: its company users are
+   * blocked at login (lib/auth.ts) and the SuperAdmin console flags it.
+   * Absent = trial with no clock (never expires). Ignored for non-trial
+   * statuses. See db.trialStatusOf().
+   */
+  trialEndsAt?: string;
   createdAt: string;        // ISO datetime
   branding: CompanyBranding;
   config: CompanyConfig;
@@ -352,6 +360,9 @@ export interface Payslip {
   adjustmentEarnings?: number;
   /** Sum of deduction adjustments (already deducted from netPay). */
   adjustmentDeductions?: number;
+  /** ISO datetime when this payslip was marked as distributed to the employee
+   *  (batch distribution on the BatchPayslips page); absent = not yet handed out. */
+  distributedAt?: string;
 }
 
 export type KPIStatus = 'active' | 'completed' | 'archived';

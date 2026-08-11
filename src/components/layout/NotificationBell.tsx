@@ -3,18 +3,21 @@
  * items, always-lit fake dot).
  *
  * Items are computed from the real collections and scoped by the effective
- * role via useAuth's scoping helpers:
- *   - Admin / HR : pending leaves + pending (submitted) claims + unapproved OT,
+ * role. Approver queues (leave / claims / OT) come from the SHARED
+ * usePendingApprovals() hook (pages/approvals), so the badge count always
+ * equals the /approvals inbox counts:
+ *   - Admin / HR : pending leaves + pending (submitted) claims + undecided OT,
  *                  across the whole active company.
- *   - Manager    : the same queues, limited to their own department
- *                  (scopeByEmployee).
+ *   - Manager    : the same queues, limited to their own department.
  *   - Employee   : their own pending leave/claim requests, recent decisions on
  *                  them (approved/rejected within the last week) and unread
  *                  payslips from finalized runs (seen-set kept in localStorage).
  *
  * The badge renders ONLY while there is at least one item. The dropdown lists
  * up to 8 entries (icon + label + relative time), each deep-linking to the
- * relevant page, plus a "View all" shortcut and an "All caught up" empty state.
+ * unified approvals inbox for approvers (or the module page for Employees),
+ * plus a "View all" shortcut (/approvals for approver roles) and an
+ * "All caught up" empty state.
  */
 import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -25,8 +28,9 @@ import {
 import { useAuth } from '@/lib/useAuth';
 import { useCollection } from '@/lib/db';
 import type {
-  AttendanceRecord, Claim, Employee, LeaveRequest, PayrollRun, Payslip,
+  Claim, Employee, LeaveRequest, PayrollRun, Payslip,
 } from '@/lib/types';
+import { usePendingApprovals } from '@/pages/approvals/usePendingApprovals';
 import { cn, fmtDate, fmtRM } from '@/lib/utils';
 import { useEffectiveRole } from './useEffectiveRole';
 import { Button } from '@/components/ui/button';
@@ -97,14 +101,16 @@ function readSeen(employeeId: string): Set<string> {
 
 export default function NotificationBell() {
   const { role } = useEffectiveRole();
-  const { employeeId, scopeByEmployee } = useAuth();
+  const { employeeId } = useAuth();
   const navigate = useNavigate();
   const { items: employees } = useCollection<Employee>('employees');
   const { items: leaves } = useCollection<LeaveRequest>('leaves');
   const { items: claims } = useCollection<Claim>('claims');
-  const { items: attendance } = useCollection<AttendanceRecord>('attendance');
   const { items: payslips } = useCollection<Payslip>('payslips');
   const { items: runs } = useCollection<PayrollRun>('payrollRuns');
+  // Shared pending-approvals aggregation — the badge below uses the SAME
+  // counts as the /approvals inbox tabs (audit-business-value quick win).
+  const pendingApprovals = usePendingApprovals();
 
   const isApprover = role === 'Admin' || role === 'HR' || role === 'Manager';
 
@@ -125,48 +131,50 @@ export default function NotificationBell() {
     setSeenPayslips(employeeId ? readSeen(employeeId) : new Set());
   }
 
-  /** Approval queues (Admin/HR company-wide, Manager own-department). */
+  /**
+   * Approval queues (Admin/HR company-wide, Manager own-department) — built
+   * from the shared usePendingApprovals queues so the items AND the badge
+   * count match the /approvals inbox exactly. Each entry deep-links to the
+   * unified inbox, where the decision can be made inline.
+   */
   const approverItems = useMemo<NotificationItem[]>(() => {
     if (!isApprover) return [];
     const out: NotificationItem[] = [];
-    for (const l of scopeByEmployee(leaves, (x) => x.employeeId)) {
-      if (l.status !== 'pending') continue;
+    for (const l of pendingApprovals.queues.leave) {
       out.push({
         id: `leave-${l.id}`,
         icon: CalendarClock,
         label: `Leave request — ${nameOf(l.employeeId)}`,
         detail: `${capitalize(l.type)} · ${plural(l.days, 'day')} · starts ${fmtDate(l.startDate)}`,
         at: l.appliedAt,
-        href: '/leave',
+        href: '/approvals',
         tone: 'queue',
       });
     }
-    for (const c of scopeByEmployee(claims, (x) => x.employeeId)) {
-      if (c.status !== 'submitted') continue;
+    for (const c of pendingApprovals.queues.claims) {
       out.push({
         id: `claim-${c.id}`,
         icon: Receipt,
         label: `Claim — ${nameOf(c.employeeId)}`,
         detail: `${c.title} · ${fmtRM(c.amount)}`,
         at: c.submittedAt ?? c.claimDate,
-        href: '/claims',
+        href: '/approvals',
         tone: 'queue',
       });
     }
-    for (const a of scopeByEmployee(attendance, (x) => x.employeeId)) {
-      if (a.otHours <= 0 || a.otApproved) continue;
+    for (const a of pendingApprovals.queues.ot) {
       out.push({
         id: `ot-${a.id}`,
         icon: Clock3,
         label: `OT approval — ${nameOf(a.employeeId)}`,
         detail: `${a.otHours}h OT on ${fmtDate(a.date)}`,
         at: a.date,
-        href: '/attendance',
+        href: '/approvals',
         tone: 'queue',
       });
     }
     return out;
-  }, [isApprover, scopeByEmployee, leaves, claims, attendance, nameOf]);
+  }, [isApprover, pendingApprovals.queues, nameOf]);
 
   /** Self-service view (Employee role): own pending + recent decisions + payslips. */
   // "Now" snapshot taken once at mount keeps render pure (react-hooks/purity);
@@ -258,14 +266,18 @@ export default function NotificationBell() {
       ),
     [isApprover, approverItems, employeeItems],
   );
-  const count = items.length;
+  // Bell badge === inbox badge: approver counts come straight from the shared
+  // aggregation (counts.total), never re-derived here.
+  const count = isApprover ? pendingApprovals.counts.total : items.length;
 
   // Freeze the visible list while the dropdown is open so "mark payslips seen
   // on open" clears the badge without items vanishing mid-read.
   const [open, setOpen] = useState(false);
   const [frozen, setFrozen] = useState<NotificationItem[] | null>(null);
   const displayed = open && frozen ? frozen : items;
-  const viewAllHref = displayed[0]?.href ?? '/';
+  // Approver roles jump to the unified approvals inbox; Employees keep the
+  // previous behaviour (deep-link to the first item's module page).
+  const viewAllHref = isApprover ? '/approvals' : displayed[0]?.href ?? '/';
 
   const handleOpenChange = (next: boolean) => {
     setOpen(next);
