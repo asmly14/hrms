@@ -1,1 +1,0 @@
-import{u as r}from"./index-DbL5D7rm.js";function u(){try{return r()}catch{return null}}function i(e){return e?e.role==="Admin"||e.role==="HR":!0}function n(e){return!e||e.role==="Admin"||e.role==="HR"}function o(e){return n(e)}function s(e){return e?.user?.username??"attendance module"}export{s as a,n as b,i as c,o as i,u};
