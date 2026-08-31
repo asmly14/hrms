@@ -2,7 +2,7 @@
  * Alerts panel — compliance and workforce warnings:
  *  - full-time staff below the minimum wage (MINIMUM_WAGE)
  *  - employees over the monthly OT cap (MAX_OT_HOURS_MONTH) this month
- *  - probation periods ending within 30 days (3-month probation assumed)
+ *  - probation periods ending within 30 days (extension-aware end dates)
  *  - foreign-worker EPF 2% + 2% mandatory-contribution reminder
  * Thresholds come from @/lib/statutory; nothing is hardcoded.
  */
@@ -11,11 +11,11 @@ import { AlertTriangle, CircleCheck, Globe, Hourglass, Timer, Wallet } from 'luc
 import { useAuth } from '@/lib/useAuth';
 import { useCollection } from '@/lib/db';
 import { MAX_OT_HOURS_MONTH, MINIMUM_WAGE } from '@/lib/statutory';
-import { daysBetween, fmtRM, monthKey, round2 } from '@/lib/utils';
+import { fmtRM, monthKey, round2 } from '@/lib/utils';
 import type { AttendanceRecord, Employee } from '@/lib/types';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { addMonths, isoOf, todayISO } from '../lib';
+import { probationDaysLeft } from '@/pages/employees/helpers';
 
 interface AlertItem {
   id: string;
@@ -36,7 +36,6 @@ export function AlertsPanel() {
   // this guard is defence-in-depth.)
   if (role === 'Employee') return null;
 
-  const today = todayISO();
   const thisMonth = monthKey();
   // Scoped to the visible workforce: Admin/HR → everyone, Manager → own
   // department only, so alerts never reference anyone outside the scope.
@@ -60,14 +59,13 @@ export function AlertsPanel() {
     .map((e) => ({ emp: e, hours: round2(otByEmp.get(e.id) ?? 0) }))
     .filter((x) => x.hours > MAX_OT_HOURS_MONTH);
 
-  // 3. Probation: ending within 30 days OR already overdue (still 'probation'
-  //    past join + 3 months — confirmation overdue is the riskier case).
+  // 3. Probation: ending within 30 days OR already overdue. End dates are
+  //    extension-aware (probationEndDate), so extended employees re-appear
+  //    here when the new date approaches — confirmation overdue is the
+  //    riskier case.
   const probation = active
     .filter((e) => e.status === 'probation')
-    .map((e) => {
-      const end = addMonths(new Date(`${e.joinDate}T00:00:00`), 3);
-      return { emp: e, daysLeft: daysBetween(today, isoOf(end)) };
-    });
+    .map((e) => ({ emp: e, daysLeft: probationDaysLeft(e) }));
   const probationOverdue = probation
     .filter((x) => x.daysLeft < 0)
     .sort((a, b) => a.daysLeft - b.daysLeft);
@@ -85,7 +83,7 @@ export function AlertsPanel() {
       id: 'probation-overdue',
       icon: Hourglass,
       title: 'Probation overdue',
-      detail: `${worst.emp.name} is ${-worst.daysLeft}d past the 3-month mark${
+      detail: `${worst.emp.name} is ${-worst.daysLeft}d past probation end${
         probationOverdue.length > 1 ? ` +${probationOverdue.length - 1} more` : ''
       } — confirm or extend`,
       to: '/employees',

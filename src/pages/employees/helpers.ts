@@ -14,9 +14,10 @@ import type {
 } from './types';
 
 /**
- * Probation policy assumption (contract gap — `Employee` has no
- * probationEndDate): Malaysian private-sector practice is a 3-month
- * probation from join date. Used by the probation tracker only.
+ * Probation policy: Malaysian private-sector practice is a 3-month probation
+ * from join date. Employees may override the length (`probationMonths`) and
+ * HR may push the end date out (`probationExtendedTo`) — the extension always
+ * wins over the derived date. Full trail lives in `probationHistory`.
  */
 export const PROBATION_MONTHS = 3;
 
@@ -29,24 +30,56 @@ export function addMonths(iso: string, months: number): Date {
   return d;
 }
 
-export function probationEnd(joinDate: string): Date {
-  return addMonths(joinDate, PROBATION_MONTHS);
+/** Local Date → 'YYYY-MM-DD'. */
+export function isoDate(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+/** Probation length in months for this employee (policy default: 3). */
+export function probationMonthsOf(emp: Employee): number {
+  return emp.probationMonths ?? PROBATION_MONTHS;
+}
+
+/**
+ * ISO date the employee's probation currently ends: the HR-set extension when
+ * present, otherwise joinDate + probationMonths.
+ */
+export function probationEndDate(emp: Employee): string {
+  return emp.probationExtendedTo ?? isoDate(addMonths(emp.joinDate, probationMonthsOf(emp)));
+}
+
+export function probationEnd(emp: Employee): Date {
+  return new Date(`${probationEndDate(emp)}T00:00:00`);
 }
 
 /** Whole days until probation ends; negative = overdue for confirmation. */
-export function probationDaysLeft(joinDate: string, asOf: Date = new Date()): number {
+export function probationDaysLeft(emp: Employee, asOf: Date = new Date()): number {
   const today = new Date(asOf.getFullYear(), asOf.getMonth(), asOf.getDate());
-  const end = probationEnd(joinDate);
-  return daysBetween(today, end);
+  return daysBetween(today, probationEnd(emp));
 }
 
-/** 0–1 progress through the probation period. */
-export function probationProgress(joinDate: string, asOf: Date = new Date()): number {
-  const start = new Date(`${joinDate}T00:00:00`);
-  const total = daysBetween(start, probationEnd(joinDate));
+/** 0–1 progress through the probation period (join date → current end date). */
+export function probationProgress(emp: Employee, asOf: Date = new Date()): number {
+  const start = new Date(`${emp.joinDate}T00:00:00`);
+  const total = daysBetween(start, probationEnd(emp));
   if (total <= 0) return 1;
   const elapsed = daysBetween(start, asOf);
   return Math.min(1, Math.max(0, elapsed / total));
+}
+
+export interface ProbationStatus {
+  /** True while the employee is still on probation (status === 'probation'). */
+  active: boolean;
+  /** Whole days until the current end date; negative when past it. */
+  daysLeft: number;
+  /** On probation and past the current end date — confirmation overdue. */
+  overdue: boolean;
+}
+
+export function probationStatus(emp: Employee, asOf: Date = new Date()): ProbationStatus {
+  const active = emp.status === 'probation';
+  const daysLeft = probationDaysLeft(emp, asOf);
+  return { active, daysLeft, overdue: active && daysLeft < 0 };
 }
 
 /** Completed service years (1 decimal, floored — 1.96 yrs shows as 1.9, not 2.0). */

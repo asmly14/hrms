@@ -25,6 +25,7 @@ import type {
 import { empById, monthLabel } from './helpers';
 import StatutoryOutputs from './StatutoryOutputs';
 import EmployeeAdjustDialog from './EmployeeAdjustDialog';
+import OrgPayrollReport from './OrgPayrollReport';
 import { Money } from './components';
 import { canSeeSensitive, useAuthSafe } from '@/lib/useAuthSafe';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
@@ -167,6 +168,7 @@ export default function RunDetail() {
               <BadgeCheck className="h-4 w-4" /> Finalize run
             </Button>
           )}
+          {!isDraft && <OrgPayrollReport run={run} />}
           <Button variant="outline" onClick={() => setConfirmUndo(true)}>
             <Undo2 className="h-4 w-4" /> Undo run
           </Button>

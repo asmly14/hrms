@@ -172,6 +172,21 @@ export interface YTDCarryIn {
   note?: string;      // e.g. prior employer name
 }
 
+/**
+ * One entry in the employee's probation audit trail. `fromEnd`/`toEnd` are
+ * ISO dates: for 'extended' the previous → new end date; for 'confirmed' the
+ * scheduled end → the actual confirmation date; for 'terminated' the
+ * scheduled end → the separation date.
+ */
+export interface ProbationHistoryEntry {
+  action: 'extended' | 'confirmed' | 'terminated';
+  fromEnd: string;      // ISO date
+  toEnd: string;        // ISO date
+  reason?: string;
+  by: string;           // actor display name
+  at: string;           // ISO datetime the action was recorded
+}
+
 export interface Employee {
   id: string;
   /** Human-facing staff number (company-scoped), e.g. 'ASM0007'. Generated via
@@ -204,6 +219,13 @@ export interface Employee {
   resignDate?: string;
   /** TP3 prior-employer YTD carry-in (see YTDCarryIn) — seeds PCB/YTD chains. */
   ytdCarryIn?: YTDCarryIn;
+  // ── Probation (additive; absent = 3-month policy from joinDate) ──
+  /** Probation length in months; defaults to 3 when absent. */
+  probationMonths?: number;
+  /** ISO date — set when probation is extended; overrides the derived end. */
+  probationExtendedTo?: string;
+  /** Append-only trail of probation actions (extend / confirm / terminate). */
+  probationHistory?: ProbationHistoryEntry[];
   // ── Salary type (additive; absent = 'monthly') ──
   /** Pay basis for the employee's basic — see SalaryType. */
   salaryType?: SalaryType;

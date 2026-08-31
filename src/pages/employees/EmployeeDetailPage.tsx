@@ -4,6 +4,7 @@ import {
   AlertTriangle,
   ArrowLeft,
   BadgeCheck,
+  CalendarClock,
   CalendarDays,
   FileText,
   FolderOpen,
@@ -43,6 +44,11 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { EmployeeAvatar } from './EmployeeAvatar';
 import { StatusBadge, TypeBadge } from './EmployeeBadges';
 import { EmployeeFormDialog } from './EmployeeFormDialog';
+import {
+  ExtendProbationDialog,
+  ProbationTimeline,
+} from './ProbationActions';
+import { confirmProbationAction } from './probation';
 import { SeparationMenu } from './SeparationActions';
 import { carryInOf, customOf } from './types';
 import {
@@ -52,7 +58,8 @@ import {
   maskIc,
   positionTitle,
   probationDaysLeft,
-  probationEnd,
+  probationEndDate,
+  probationMonthsOf,
   probationProgress,
   serviceYears,
 } from './helpers';
@@ -102,6 +109,7 @@ export default function EmployeeDetailPage() {
   const { activeCompany } = useTenant();
 
   const [editOpen, setEditOpen] = useState(false);
+  const [extendOpen, setExtendOpen] = useState(false);
 
   const emp = employees.find((e) => e.id === id);
 
@@ -185,7 +193,7 @@ export default function EmployeeDetailPage() {
     .filter((p) => p.employeeId === emp.id)
     .sort((a, b) => b.monthKey.localeCompare(a.monthKey));
 
-  const daysLeft = emp.status === 'probation' ? probationDaysLeft(emp.joinDate) : null;
+  const daysLeft = emp.status === 'probation' ? probationDaysLeft(emp) : null;
 
   // After a permanent delete, leave the now-dangling detail route.
   const onSeparationCompleted = () => {
@@ -352,17 +360,47 @@ export default function EmployeeDetailPage() {
                   Probation
                 </CardTitle>
               </CardHeader>
-              <CardContent className="space-y-2">
-                <Progress value={probationProgress(emp.joinDate) * 100} className="h-1.5" />
+              <CardContent className="space-y-3">
+                <Progress value={probationProgress(emp) * 100} className="h-1.5" />
                 <p className="text-sm text-muted-foreground">
-                  Assumed {daysLeft !== null && daysLeft < 0 ? 'ended' : 'ends'}{' '}
-                  {fmtDate(probationEnd(emp.joinDate))} (3-month policy from join date)
+                  {daysLeft !== null && daysLeft < 0 ? 'Ended' : 'Ends'}{' '}
+                  {fmtDate(probationEndDate(emp))}{' '}
+                  {emp.probationExtendedTo
+                    ? '(extended — see history below)'
+                    : `(${probationMonthsOf(emp)}-month policy from join date)`}
                   {daysLeft !== null && (
                     <span className={daysLeft < 0 ? 'font-medium text-red-700' : 'font-medium text-amber-700'}>
                       {' '}— {daysLeft < 0 ? `${Math.abs(daysLeft)} days overdue for confirmation` : `${daysLeft} days remaining`}
                     </span>
                   )}
                 </p>
+                {emp.probationExtendedTo && (
+                  <p className="flex items-center gap-1.5 text-xs text-amber-800">
+                    <CalendarClock className="h-3.5 w-3.5" />
+                    Extended to {fmtDate(emp.probationExtendedTo)}
+                  </p>
+                )}
+                {(emp.probationHistory?.length ?? 0) > 0 && (
+                  <div className="rounded-lg border border-amber-200/70 bg-white/60 p-3">
+                    <ProbationTimeline entries={emp.probationHistory ?? []} />
+                  </div>
+                )}
+                {isHR && (
+                  <div className="flex flex-wrap gap-2 pt-1">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => confirmProbationAction(emp, actorName)}
+                    >
+                      <BadgeCheck className="mr-1.5 h-3.5 w-3.5 text-lime-700" />
+                      Confirm employment
+                    </Button>
+                    <Button size="sm" variant="outline" onClick={() => setExtendOpen(true)}>
+                      <CalendarClock className="mr-1.5 h-3.5 w-3.5 text-amber-700" />
+                      Extend probation…
+                    </Button>
+                  </div>
+                )}
               </CardContent>
             </Card>
           )}
@@ -591,6 +629,14 @@ export default function EmployeeDetailPage() {
 
       {isHR && (
         <EmployeeFormDialog open={editOpen} onOpenChange={setEditOpen} employee={emp} />
+      )}
+      {isHR && emp.status === 'probation' && (
+        <ExtendProbationDialog
+          employee={emp}
+          actorName={actorName}
+          open={extendOpen}
+          onOpenChange={setExtendOpen}
+        />
       )}
     </div>
   );
