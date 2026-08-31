@@ -33,6 +33,15 @@
  *  gross-inclusive annualization (unchanged figures for pre-tag payslips).
  * Claims reimbursements are paid in net but flagged nonStatutory; BIK/VOLA
  * lines are flagged nonCash (PCB base only — never gross or net).
+ * Employee LOANS (lib/loans.ts): each active loan's scheduled installment is
+ * deducted from NET only (never the statutory bases), capped by EA 1955 s.24
+ * (total deductions ≤ 50% of the month's wages — shortfalls defer and the
+ * loan's schedule rebuilds). RECURRING BENEFITS (lib/benefits.ts) auto-inject
+ * per run on the same wage-base tag path as the pay-items catalog
+ * (reimbursement → non-statutory; BIK → non-cash PCB; taxable allowance →
+ * all bases). Loans are marked paid on finalize and restored on undo, exactly
+ * like claims; benefits are derived at compute time, so re-runs are
+ * idempotent by construction.
  * Statutory opt-outs (excludeEpf/Socso/Eis/Pcb) zero BOTH the employee and
  * employer shares of that scheme for the run and are recorded on the payslip
  * with their reason; the payslip prints a zero '— opted out (reason)' line.
@@ -78,10 +87,16 @@ import {
   PRORATION_LABELS, calendarDaysInMonth, prorate, resolveProrationMethod,
   unpaidLeaveDaysInMonth, workingDaysInMonth,
 } from './workdays';
+import { benefitAsAdjustment, benefitsForMonth } from './benefits';
+import {
+  MAX_TOTAL_DEDUCTION_RATIO, loanInstallmentsDue, recordRunLoanDeductions,
+  repointRunLoanPayments, revertRunLoanPayments,
+} from './loans';
 import { ageFromDob, round2 } from './utils';
 import type {
   AttendanceRecord, Claim, Employee, LeaveRequest, PayrollProrationMethod,
-  PayrollRun, Payslip, PayslipAdjustment, PayslipEditInput, PayslipLine, SalaryType,
+  PayrollRun, Payslip, PayslipAdjustment, PayslipEditInput, PayslipLine,
+  PayslipLoanDeduction, SalaryType,
   Settings as CompanySettings, StatutoryOptOutKey, YTDCarryIn,
 } from './types';
 
@@ -474,6 +489,18 @@ function computePayslip(emp: Employee, ctx: PayslipCtx, edit: PayslipEditInput =
   );
   const claimsTotal = round2(monthClaims.reduce((s, c) => s + c.amount, 0));
 
+  // ── Recurring benefits (lib/benefits.ts) — auto-injected every run ──
+  // Monthly benefits always inject; annual benefits inject in their picked
+  // month. The draft editor may SKIP a benefit for this run only
+  // (edit.excludeBenefitIds) — non-destructive: a reset re-adds it.
+  const excludedBenefitIds = edit.excludeBenefitIds ?? [];
+  const monthBenefits = benefitsForMonth(emp.id, month).filter(
+    (b) => !excludedBenefitIds.includes(b.id),
+  );
+  // Mapped onto the pay-items wage-base path (reimbursement → non-statutory;
+  // BIK → non-cash PCB; taxable allowance → all tags on).
+  const benefitLines = monthBenefits.map(benefitAsAdjustment);
+
   // ── Ad-hoc editor adjustments (draft runs) ──
   // Earnings split three ways: gross-joining wages, non-statutory cash
   // reimbursements (paid in net, like claims), and non-cash BIK/VOLA (PCB
@@ -492,17 +519,30 @@ function computePayslip(emp: Employee, ctx: PayslipCtx, edit: PayslipEditInput =
     cleanAdjustments.filter((a) => a.kind === 'deduction').reduce((s, a) => s + a.amount, 0),
   );
 
+  // ── Benefit totals by treatment (kept separate from the editor-adjustment
+  //  totals above so payslip.adjustment* fields stay editor-only) ──
+  const benefitGrossLines = benefitLines.filter((a) => !a.nonStatutory && !a.nonCash);
+  const benefitWages = round2(benefitGrossLines.reduce((s, a) => s + a.amount, 0));
+  const benefitReimbursements = round2(
+    benefitLines.filter((a) => a.nonStatutory && !a.nonCash).reduce((s, a) => s + a.amount, 0),
+  );
+  const benefitNonCash = round2(
+    benefitLines.filter((a) => a.nonCash).reduce((s, a) => s + a.amount, 0),
+  );
+
   // ── Statutory wage bases, accumulated per line tag (research doc §6) ──
   // UNTAGGED earning lines keep the legacy behaviour (SOCSO/EIS ✓, EPF ✗,
   // PCB additional remuneration) so pre-tag figures never drift; TAGGED
   // lines feed exactly the bases their tags mark.
   const untagged = grossEarnings.filter((a) => !a.tags);
-  const tagged = grossEarnings.filter((a) => a.tags);
+  // Benefit taxable-allowance lines always carry TAGS_ALL — they join the
+  // tagged pool so every wage base accumulates them (EPF/SOCSO/EIS/PCB).
+  const tagged = [...grossEarnings.filter((a) => a.tags), ...benefitGrossLines];
   const untaggedTotal = round2(untagged.reduce((s, a) => s + a.amount, 0));
   const taggedSum = (pick: (a: PayslipAdjustment) => boolean) =>
     round2(tagged.filter(pick).reduce((s, a) => s + a.amount, 0));
 
-  const grossPay = round2(basicPay + allowanceTotal + otPay + adjustmentEarnings);
+  const grossPay = round2(basicPay + allowanceTotal + otPay + adjustmentEarnings + benefitWages);
   const epfBase = round2(basicPay + allowanceTotal + taggedSum((a) => a.tags!.epf));
   const socsoBase = round2(basicPay + allowanceTotal + otPay + untaggedTotal + taggedSum((a) => a.tags!.socso));
   const eisBase = round2(basicPay + allowanceTotal + otPay + untaggedTotal + taggedSum((a) => a.tags!.eis));
@@ -550,14 +590,16 @@ function computePayslip(emp: Employee, ctx: PayslipCtx, edit: PayslipEditInput =
   // line: normal remuneration = basic + allowances + OT + pcb-tagged normal
   // lines + non-cash BIK (TP2); additional remuneration (bonus/commission/
   // director fees + legacy untagged lines) taxed via the aggregate delta.
-  const hasTaggedLines = tagged.length > 0 || earningLines.some((a) => a.nonCash && a.tags);
+  const hasTaggedLines =
+    tagged.length > 0 ||
+    [...earningLines, ...benefitLines].some((a) => a.nonCash && a.tags);
   let pcbBase: number;
   let pcbAdditional: number;
   if (hasTaggedLines) {
     pcbBase = round2(
       basicPay + allowanceTotal + otPay +
       taggedSum((a) => a.tags!.pcb && !a.additionalRemuneration) +
-      round2(earningLines.filter((a) => a.nonCash && a.tags?.pcb).reduce((s, a) => s + a.amount, 0)),
+      round2([...earningLines, ...benefitLines].filter((a) => a.nonCash && a.tags?.pcb).reduce((s, a) => s + a.amount, 0)),
     );
     pcbAdditional = round2(
       taggedSum((a) => a.tags!.pcb && a.additionalRemuneration === true) + untaggedTotal,
@@ -580,12 +622,46 @@ function computePayslip(emp: Employee, ctx: PayslipCtx, edit: PayslipEditInput =
       });
   const hrd = hrdfLevy(round2(basicPay + allowanceTotal), ctx.numLocal);
 
+  // ── Employee loan installments (lib/loans.ts) — NON-statutory ──
+  // Each active loan's scheduled installment for the month is deducted from
+  // NET pay only (never the EPF/SOCSO/EIS/PCB bases), capped at the loan's
+  // remaining balance. EA 1955 s.24 guard: TOTAL deductions (statutory +
+  // editor deductions + loans) may not exceed 50% of the month's wages —
+  // loans are the last claimant on that headroom; a capped installment's
+  // shortfall is DEFERRED (the loan's schedule rebuilds on finalize,
+  // extending the term) with a payslip info line + a run warning.
+  const dueInstallments = loanInstallmentsDue(emp.id, month);
+  let deductionHeadroom = round2(
+    Math.max(
+      0,
+      grossPay * MAX_TOTAL_DEDUCTION_RATIO -
+        epf.employee - socso.employee - eis.employee - pcb - adjustmentDeductions,
+    ),
+  );
+  const loanDeductions: PayslipLoanDeduction[] = dueInstallments.map(({ loan, entry }) => {
+    const scheduled = round2(Math.min(entry.amount, loan.remaining));
+    const applied = round2(Math.min(scheduled, deductionHeadroom));
+    deductionHeadroom = round2(deductionHeadroom - applied);
+    const deferred = round2(scheduled - applied);
+    if (deferred > 0) {
+      ctx.warnings.push(
+        `${emp.name}: loan ${loan.refNo} installment capped at RM${applied.toFixed(2)} of ` +
+          `RM${scheduled.toFixed(2)} — RM${deferred.toFixed(2)} deferred to the remaining schedule ` +
+          `(EA 1955 s.24: total deductions ≤ 50% of the month's wages)`,
+      );
+    }
+    return { loanId: loan.id, refNo: loan.refNo, scheduled, applied, deferred };
+  });
+  const loanDeductionTotal = round2(loanDeductions.reduce((s, d) => s + d.applied, 0));
+
   const netPay = round2(
-    grossPay - epf.employee - socso.employee - eis.employee - pcb - adjustmentDeductions +
-    claimsTotal + adjustmentReimbursements,
+    grossPay - epf.employee - socso.employee - eis.employee - pcb - adjustmentDeductions -
+    loanDeductionTotal +
+    claimsTotal + adjustmentReimbursements + benefitReimbursements,
   );
   const employerCost = round2(
-    grossPay + epf.employer + socso.employer + eis.employer + hrd + claimsTotal + adjustmentReimbursements,
+    grossPay + epf.employer + socso.employer + eis.employer + hrd +
+    claimsTotal + adjustmentReimbursements + benefitReimbursements,
   );
 
   // ── Compliance warnings ──
@@ -674,11 +750,38 @@ function computePayslip(emp: Employee, ctx: PayslipCtx, edit: PayslipEditInput =
     ...(excludePcb
       ? [{ label: `PCB / MTD${optOutSuffix('pcb')}`, amount: 0, kind: 'deduction' as const }]
       : [{ label: 'PCB / MTD', amount: -pcb, kind: 'deduction' as const }]),
+    // Loan repayments: net-only deduction lines (never statutory bases); a
+    // capped installment also prints an info line naming the deferred amount.
+    ...loanDeductions
+      .filter((d) => d.applied > 0)
+      .map((d) => ({
+        label: `Loan repayment — ${d.refNo}`,
+        amount: -d.applied,
+        kind: 'deduction' as const,
+      })),
+    ...loanDeductions
+      .filter((d) => d.deferred > 0)
+      .map((d) => ({
+        label:
+          `Loan repayment capped (EA 1955 s.24 — 50% wage limit): RM ${d.deferred.toFixed(2)} ` +
+          `of ${d.refNo} deferred to the remaining schedule`,
+        amount: 0,
+        kind: 'info' as const,
+      })),
     ...monthClaims.map((c) => ({
       label: `Claim — ${c.title}`,
       amount: round2(c.amount),
       kind: 'earning' as const,
       nonStatutory: true,
+    })),
+    // Recurring benefits: shown distinctly; treatment flags drive rendering
+    // (reimbursement → non-statutory block, BIK → non-cash block).
+    ...monthBenefits.map((b) => ({
+      label: `Benefit — ${b.name}`,
+      amount: round2(b.amount),
+      kind: 'earning' as const,
+      ...(b.treatment === 'nonStatutory-reimbursement' ? { nonStatutory: true as const } : {}),
+      ...(b.treatment === 'non-cash-bik' ? { nonCash: true as const } : {}),
     })),
     ...(excludeEpf
       ? [{ label: `EPF employer${optOutSuffix('epf')}`, amount: 0, kind: 'employer' as const }]
@@ -754,6 +857,22 @@ function computePayslip(emp: Employee, ctx: PayslipCtx, edit: PayslipEditInput =
     ...(excludeEpf || excludeSocso || excludeEis || excludePcb
       ? { optOutReasons: edit.optOutReasons ?? {} }
       : {}),
+    // ── Loans & benefits (additive; absent when none — legacy slips unchanged) ──
+    ...(loanDeductions.length > 0 ? { loanDeductions, loanDeductionTotal } : {}),
+    ...(monthBenefits.length > 0
+      ? {
+          benefits: monthBenefits.map((b) => ({
+            benefitId: b.id,
+            name: b.name,
+            amount: round2(b.amount),
+            treatment: b.treatment,
+          })),
+          benefitReimbursements,
+          benefitNonCash,
+          benefitWages,
+        }
+      : {}),
+    ...(excludedBenefitIds.length > 0 ? { excludedBenefitIds } : {}),
   };
 }
 
@@ -884,6 +1003,29 @@ export function runPayroll(
     return c;
   });
   if (nextClaims.some((c, i) => c !== claims[i])) setCollection('claims', nextClaims);
+
+  // Loans: same lifecycle as claims — DRAFT runs compute deduction previews
+  // but never mark loans; installments are recorded only for finalized runs.
+  // Re-run integrity (B1): the replaced runs' payments for TARGETED employees
+  // are reverted first (the new payslips may deduct different amounts after
+  // the EA s.24 cap), then the new payslips' deductions are recorded;
+  // surviving (non-targeted) employees' payments are re-pointed to the new
+  // run id so loan.schedule[].paidInRunId never dangles either.
+  if (!isDraft) {
+    revertRunLoanPayments(priorRunIds, targetIds);
+    repointRunLoanPayments(priorRunIds, run.id, survivorEmpIds);
+    recordRunLoanDeductions(
+      run.id,
+      payslips.flatMap((p) =>
+        (p.loanDeductions ?? []).map((d) => ({
+          employeeId: p.employeeId,
+          month,
+          loanId: d.loanId,
+          applied: d.applied,
+        })),
+      ),
+    );
+  }
 
   // Run totals reflect the WHOLE month (new payslips + re-pointed survivors),
   // so run history / giro / statutory exports never silently under-report
@@ -1121,6 +1263,19 @@ export function finalizePayrollRun(runId: string, runBy = 'system'): PayrollRun 
       : c,
   );
   if (nextClaims.some((c, i) => c !== claims[i])) setCollection('claims', nextClaims);
+  // Loans: record the run's installments now that the run is locked — the
+  // payslips' loanDeductions were computed (and previewed) at draft time.
+  recordRunLoanDeductions(
+    runId,
+    slips.flatMap((p) =>
+      (p.loanDeductions ?? []).map((d) => ({
+        employeeId: p.employeeId,
+        month: run.monthKey,
+        loanId: d.loanId,
+        applied: d.applied,
+      })),
+    ),
+  );
   const finalized: PayrollRun = { ...run, status: 'finalized', finalizedAt: new Date().toISOString() };
   setCollection(
     'payrollRuns',
@@ -1160,6 +1315,11 @@ export function undoPayrollRun(runId: string, runBy = 'system'): boolean {
       : c,
   );
   if (nextClaims.some((c, i) => c !== claims[i])) setCollection('claims', nextClaims);
+  // Loans: revert every installment this run recorded — the affected loans'
+  // schedules rebuild from their remaining payment history, restoring the
+  // exact pre-run state (deferred terms shorten back; auto-settled loans
+  // reactivate).
+  revertRunLoanPayments(new Set([runId]));
   logAudit({
     actorName: runBy,
     action: 'payroll.undo',

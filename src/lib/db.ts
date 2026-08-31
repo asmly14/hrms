@@ -84,6 +84,11 @@ export const COLLECTIONS = [
   'objectives', //           lib/kpiEngine.ts
   'checkins', //             lib/kpiEngine.ts
   'pips', //                 lib/kpiEngine.ts
+  // Employee loans & recurring benefits (CompExtras wave) — payroll-adjacent
+  // module stores (lib/loans.ts / lib/benefits.ts); first-class registry
+  // members so export / import / migration / seed init cover them.
+  'loans', //                lib/loans.ts
+  'benefits', //             lib/benefits.ts
   // Attendance rotation plans. Physically a SUB-KEY
   // (`myhrms:t:<companyId>:attendance:rotations`); the registry key builder
   // composes exactly that, so export / import / legacy migration / per-tenant

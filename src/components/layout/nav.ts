@@ -15,7 +15,7 @@
  */
 import {
   Banknote, Building2, Calendar, CalendarDays, ClipboardList, FileText, Gauge,
-  Inbox, LayoutDashboard, Network, Receipt, ScrollText, Settings, ShieldCheck,
+  HandCoins, Inbox, LayoutDashboard, Network, Receipt, ScrollText, Settings, ShieldCheck,
   TrendingUp, UserRoundCheck, UserRoundMinus, Users, Wallet, Workflow,
 } from 'lucide-react';
 import type { AppRole } from '@/lib/roleContext';
@@ -48,6 +48,10 @@ export const NAV_ITEMS: NavItem[] = [
   { path: '/holidays', title: 'Holidays', icon: CalendarDays, roles: ['Admin', 'HR'] },
   { path: '/claims', title: 'Claims', icon: Receipt, roles: ['Admin', 'HR', 'Manager', 'Employee'], module: 'claims' },
   { path: '/payroll', title: 'Payroll', icon: Wallet, roles: ['Admin', 'HR'], module: 'payroll' },
+  // Employee loans + recurring benefits (pages/loans) — payroll-adjacent, so
+  // it shares the payroll module gate; Admin/HR only in nav (employees reach
+  // their scoped read-only view from their records page link).
+  { path: '/loans', title: 'Loans & Benefits', icon: HandCoins, roles: ['Admin', 'HR'], module: 'payroll' },
   // Employee self-service payslips (page: pages/payroll/MyPayslipsPage.tsx) —
   // visible to ALL roles; Admin/HR also have the full Payroll section above.
   { path: '/my-payslips', title: 'My Payslips', icon: Banknote, roles: ['Admin', 'HR', 'Manager', 'Employee'], module: 'payroll' },

@@ -30,6 +30,7 @@ import {
   applyRecommendedTags, newEarningFromPreset, payItemPreset, tagAdvice,
   PAY_ITEM_PRESETS,
 } from '@/lib/payItems';
+import { BENEFIT_TREATMENT_LABELS, benefitsForMonth } from '@/lib/benefits';
 import { LEGACY_EARNING_TAGS } from '@/lib/statutory';
 import { uid } from '@/lib/db';
 import { cn, fmtRM, round2 } from '@/lib/utils';
@@ -154,6 +155,8 @@ export default function EmployeeAdjustDialog({
   const [adjustments, setAdjustments] = useState<PayslipAdjustment[]>([]);
   const [optOuts, setOptOuts] = useState<OptOutMap>(NO_OPT_OUTS);
   const [reasons, setReasons] = useState<Partial<Record<StatutoryOptOutKey, string>>>({});
+  /** Recurring-benefit ids skipped for THIS run only (engine re-adds on reset). */
+  const [excludedBenefitIds, setExcludedBenefitIds] = useState<string[]>([]);
 
   // Add-earning form state
   const [earnPresetKey, setEarnPresetKey] = useState(PAY_ITEM_PRESETS[0]!.key);
@@ -173,7 +176,7 @@ export default function EmployeeAdjustDialog({
     ? JSON.stringify([
         payslip.id, payslip.adjustments, payslip.basicOverride, payslip.salaryTypeOverride,
         payslip.rateOverride, payslip.workedQtyOverride, payslip.excludeEpf, payslip.excludeSocso,
-        payslip.excludeEis, payslip.excludePcb, payslip.optOutReasons, open,
+        payslip.excludeEis, payslip.excludePcb, payslip.optOutReasons, payslip.excludedBenefitIds, open,
       ])
     : `closed-${open}`;
   const [syncedSig, setSyncedSig] = useState<string | null>(null);
@@ -195,6 +198,7 @@ export default function EmployeeAdjustDialog({
         pcb: payslip.excludePcb === true,
       });
       setReasons(payslip.optOutReasons ?? {});
+      setExcludedBenefitIds(payslip.excludedBenefitIds ?? []);
     }
   }
 
@@ -212,7 +216,8 @@ export default function EmployeeAdjustDialog({
     ...(optOuts.eis ? { excludeEis: true } : {}),
     ...(optOuts.pcb ? { excludePcb: true } : {}),
     optOutReasons: reasons,
-  }), [adjustments, basic, optOuts, reasons]);
+    ...(excludedBenefitIds.length > 0 ? { excludeBenefitIds: excludedBenefitIds } : {}),
+  }), [adjustments, basic, optOuts, reasons, excludedBenefitIds]);
 
   /** The edit state persisted on the stored payslip (same key order). */
   const storedEdit = useMemo<PayslipEditInput>(() => ({
@@ -226,6 +231,7 @@ export default function EmployeeAdjustDialog({
     ...(payslip?.excludeEis ? { excludeEis: true } : {}),
     ...(payslip?.excludePcb ? { excludePcb: true } : {}),
     optOutReasons: payslip?.optOutReasons ?? {},
+    ...((payslip?.excludedBenefitIds?.length ?? 0) > 0 ? { excludeBenefitIds: payslip!.excludedBenefitIds } : {}),
   }), [payslip]);
 
   const dirty = JSON.stringify(editInput) !== JSON.stringify(storedEdit);
@@ -244,10 +250,14 @@ export default function EmployeeAdjustDialog({
   const workedUnit = WORKED_UNIT_LABELS[basic.salaryType];
   const liveDeductions = round2(
     live.epfEmployee + live.socsoEmployee + live.eisEmployee + live.pcb +
-    live.unpaidLeaveDeduction + (live.adjustmentDeductions ?? 0),
+    live.unpaidLeaveDeduction + (live.adjustmentDeductions ?? 0) + (live.loanDeductionTotal ?? 0),
   );
   const liveAdditional = round2(live.otPay + (live.adjustmentEarnings ?? 0));
-  const liveReimbursements = round2(live.claimsTotal + (live.adjustmentReimbursements ?? 0));
+  const liveReimbursements = round2(
+    live.claimsTotal + (live.adjustmentReimbursements ?? 0) + (live.benefitReimbursements ?? 0),
+  );
+  /** This month's recurring benefits (engine-injected; skippable per run). */
+  const monthBenefits = benefitsForMonth(employee.id, payslip.monthKey);
 
   const setSalaryType = (v: SalaryType) => {
     // Rate & worked-qty semantics change with the type — clear those
@@ -535,6 +545,42 @@ export default function EmployeeAdjustDialog({
                 </Button>
               </div>
             </div>
+
+            {/* Recurring benefits this run — engine-injected; unticking skips
+                the benefit for THIS run only (reset re-adds it). */}
+            {monthBenefits.length > 0 && (
+              <div className="space-y-2 rounded-lg border p-2.5">
+                <p className="text-xs font-medium text-muted-foreground">Recurring benefits this run</p>
+                <ul className="space-y-1.5">
+                  {monthBenefits.map((b) => {
+                    const excluded = excludedBenefitIds.includes(b.id);
+                    return (
+                      <li key={b.id} className="flex items-center gap-2">
+                        <Checkbox
+                          id={`benefit-${b.id}`}
+                          checked={!excluded}
+                          onCheckedChange={(c) =>
+                            setExcludedBenefitIds((cur) =>
+                              c === true ? cur.filter((id) => id !== b.id) : [...cur, b.id],
+                            )
+                          }
+                        />
+                        <Label htmlFor={`benefit-${b.id}`} className="flex-1 cursor-pointer text-sm font-normal">
+                          Benefit — {b.name}
+                          <span className="ml-1 text-xs text-muted-foreground">
+                            {fmtRM(b.amount)} · {BENEFIT_TREATMENT_LABELS[b.treatment]}
+                          </span>
+                        </Label>
+                        {excluded && <Badge variant="outline" className="text-[10px]">skipped this run</Badge>}
+                      </li>
+                    );
+                  })}
+                </ul>
+                <p className="text-[11px] text-muted-foreground">
+                  Managed under Loans &amp; Benefits — skipping here never edits the benefit itself.
+                </p>
+              </div>
+            )}
           </section>
 
           {/* ── 3. Deductions ── */}

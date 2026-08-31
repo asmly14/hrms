@@ -393,6 +393,47 @@ export interface PayslipAdjustment {
 export type StatutoryOptOutKey = 'epf' | 'socso' | 'eis' | 'pcb';
 
 /**
+ * Statutory treatment of a recurring benefit (lib/benefits.ts):
+ *  - 'nonStatutory-reimbursement' — paid in net, outside gross and ALL wage
+ *    bases (mirrors the claims mechanism; genuine reimbursements).
+ *  - 'non-cash-bik' — non-cash benefit-in-kind: excluded from gross AND net,
+ *    feeds the PCB annualization base only (TP2).
+ *  - 'taxable-allowance' — cash wages: joins gross and every statutory base
+ *    (EPF/SOCSO/EIS/PCB all on).
+ */
+export type BenefitTreatment =
+  | 'nonStatutory-reimbursement'
+  | 'non-cash-bik'
+  | 'taxable-allowance';
+
+/**
+ * One employee-loan installment deducted on a payslip (lib/loans.ts). NON-
+ * statutory: reduces NET pay only, never the EPF/SOCSO/EIS/PCB bases. Capped
+ * per EA 1955 s.24 (total deductions ≤ 50% of the month's wages): `applied`
+ * is what was actually deducted this run, `deferred` the shortfall pushed
+ * forward (the loan's remaining schedule is rebuilt on finalize).
+ */
+export interface PayslipLoanDeduction {
+  loanId: string;
+  /** Human loan reference, e.g. 'LN-ASM-001'. */
+  refNo: string;
+  /** Scheduled installment for the month. */
+  scheduled: number;
+  /** Actually deducted (after the s.24 headroom cap and remaining balance). */
+  applied: number;
+  /** Scheduled − applied; deferred into the rebuilt schedule. */
+  deferred: number;
+}
+
+/** One recurring benefit injected into a payslip (lib/benefits.ts). */
+export interface PayslipBenefitEntry {
+  benefitId: string;
+  name: string;
+  amount: number;
+  treatment: BenefitTreatment;
+}
+
+/**
  * Full per-employee edit state for a draft payslip (kakitangan editor).
  * Replaces the legacy adjustments-only edit; every field is optional and
  * falls back to the employee/company defaults when absent.
@@ -416,6 +457,9 @@ export interface PayslipEditInput {
   excludePcb?: boolean;
   /** Stored reason per opted-out scheme (compliance trail). */
   optOutReasons?: Partial<Record<StatutoryOptOutKey, string>>;
+  /** Recurring-benefit ids to SKIP for this run only (draft editor). The
+   *  benefits themselves are untouched — a reset re-adds them. */
+  excludeBenefitIds?: string[];
 }
 
 export interface Payslip {
@@ -504,6 +548,21 @@ export interface Payslip {
   /** ISO datetime when this payslip was marked as distributed to the employee
    *  (batch distribution on the BatchPayslips page); absent = not yet handed out. */
   distributedAt?: string;
+  // ── Employee loans & recurring benefits (additive; absent when none) ──
+  /** Loan installments deducted this run (net-only, EA 1955 s.24 capped). */
+  loanDeductions?: PayslipLoanDeduction[];
+  /** Total loan repayment deducted (already deducted from netPay). */
+  loanDeductionTotal?: number;
+  /** Recurring benefits injected this run (before any per-run exclusions). */
+  benefits?: PayslipBenefitEntry[];
+  /** Cash reimbursements from benefits (paid in net, like claims; NOT in gross). */
+  benefitReimbursements?: number;
+  /** Non-cash BIK from benefits (PCB base only, never gross/net). */
+  benefitNonCash?: number;
+  /** Taxable-allowance benefits (already included in grossPay + wage bases). */
+  benefitWages?: number;
+  /** Benefit ids the draft editor skipped for this run (round-trip state). */
+  excludedBenefitIds?: string[];
 }
 
 export type KPIStatus = 'active' | 'completed' | 'archived';

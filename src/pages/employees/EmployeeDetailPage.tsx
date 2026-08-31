@@ -44,6 +44,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { EmployeeAvatar } from './EmployeeAvatar';
 import { StatusBadge, TypeBadge } from './EmployeeBadges';
 import { EmployeeFormDialog } from './EmployeeFormDialog';
+import EmployeeLoansCard from '@/pages/loans/EmployeeLoansCard';
 import {
   ExtendProbationDialog,
   ProbationTimeline,
@@ -460,6 +461,9 @@ export default function EmployeeDetailPage() {
             </Row>
           </InfoCard>
 
+          {/* Loans & recurring benefits summary (pages/loans module) */}
+          <EmployeeLoansCard employeeId={emp.id} />
+
           {belowMinimumWage(emp.baseSalary) && emp.employmentType !== 'part-time' && (
             <Card className="rounded-xl border-red-200 bg-red-50/60">
               <CardContent className="flex items-start gap-2.5 p-4 text-sm text-red-900">
@@ -578,7 +582,10 @@ export default function EmployeeDetailPage() {
 
         {/* ── Payslips (Admin/HR, or the employee's own record) ── */}
         {(isHR || isOwnRecord) && (
-        <TabsContent value="payslips" className="mt-4">
+        <TabsContent value="payslips" className="mt-4 space-y-4">
+          {/* Own loans & benefits summary — the /loans page self-scopes to a
+              read-only view for the employee role. */}
+          <EmployeeLoansCard employeeId={emp.id} />
           {slips.length === 0 ? (
             <Card className="rounded-xl">
               <Empty>

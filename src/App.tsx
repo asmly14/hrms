@@ -59,6 +59,9 @@ const EmployeeRecordsPage = lazy(() =>
 const OnboardFormPage = lazy(() =>
   import('@/pages/onboard/meta').then((m) => ({ default: m.OnboardFormPage })),
 );
+const LoansPage = lazy(() =>
+  import('@/pages/loans/meta').then((m) => ({ default: m.LoansPage })),
+);
 const NotFound = lazy(() => import('@/pages/NotFound'));
 
 /** Shared suspense fallback for lazy route pages. */
@@ -120,6 +123,10 @@ const routeRegistry: RouteDef[] = [
   // Employee self-service: own payslips only (page filters by the session's
   // linked employeeId, finalized runs). Open to every authenticated role.
   { path: '/my-payslips', title: 'My Payslips', element: <MyPayslipsPage />, module: 'payroll' },
+  // Loans & Benefits — Admin/HR get the full registry; other roles get a
+  // read-only view scoped to their own records (page self-gates), so the
+  // route is intentionally not role-gated (linked from the records page).
+  { path: '/loans', title: 'Loans & Benefits', element: <LoansPage />, module: 'payroll' },
   { path: '/kpi', title: 'KPI & Performance', element: <KpiPage />, roles: ['Admin', 'HR', 'Manager'], module: 'kpi' },
   { path: '/kpi/reviews/:id', title: 'Review Cycle', element: <ReviewCycle />, module: 'kpi' },
   { path: '/insights/salary', title: 'Salary Insights', element: <SalaryInsightsPage />, roles: ['Admin', 'HR'], module: 'insights' },

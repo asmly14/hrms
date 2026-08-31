@@ -13,8 +13,10 @@ import { logAudit, useCollection } from '@/lib/db';
 import {
   getEffectiveHolidays, refreshHolidays, stateInfo, states, type RefreshResult,
 } from '@/lib/holidays';
+import { publishedGazettedDates } from '@/lib/gazetted';
 import { fmtDate } from '@/lib/utils';
 import { useAuthScope } from '@/pages/leave/useAuthScope';
+import GazettedSelectionPanel from '@/pages/holidays/GazettedSelectionPanel';
 import type { Holiday, Settings as CompanySettings, StateCode } from '@/lib/types';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
@@ -28,6 +30,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { cn } from '@/lib/utils';
 
 const YEARS = [2025, 2026, 2027];
@@ -38,10 +41,15 @@ function scopeBadge(h: Holiday) {
     : <Badge variant="outline" className="gap-1"><MapPin className="h-3 w-3" />State</Badge>;
 }
 
-function HolidayBadges({ h }: { h: Holiday }) {
+function HolidayBadges({ h, gazetted }: { h: Holiday; gazetted?: boolean }) {
   return (
     <div className="flex flex-wrap gap-1">
       {scopeBadge(h)}
+      {gazetted && (
+        <Badge className="bg-emerald-100 text-emerald-800 hover:bg-emerald-100 dark:bg-emerald-900/40 dark:text-emerald-200">
+          Gazetted
+        </Badge>
+      )}
       {h.isCompulsoryEA && (
         <Badge className="bg-amber-100 text-amber-800 hover:bg-amber-100 dark:bg-amber-900/40 dark:text-amber-200">
           EA compulsory
@@ -101,6 +109,16 @@ export default function HolidaysPage() {
     tentative: effective.filter((h) => h.tentative).length,
     inLieu: effective.filter((h) => h.replacesDate).length,
   }), [effective]);
+
+  // Published s.60D selection for this year/state → dates of the statutory
+  // gazetted days (5 compulsory + chosen). Null when not published yet.
+  const gazettedSet = useMemo(
+    () => publishedGazettedDates(year, stateCode),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [year, stateCode, settingsItems, holidaysApi.items],
+  );
+  const isGazetted = (h: Holiday) =>
+    Boolean(gazettedSet && (gazettedSet.has(h.date) || (h.replacesDate && gazettedSet.has(h.replacesDate))));
 
   const onRefresh = async () => {
     setRefreshing(true);
@@ -256,182 +274,207 @@ export default function HolidaysPage() {
         )}
       </Card>
 
-      {/* Summary chips */}
-      <div className="flex flex-wrap gap-2 text-sm">
-        <Badge variant="secondary">{stats.total} holidays</Badge>
-        <Badge variant="secondary">{stats.compulsory} EA-compulsory</Badge>
-        <Badge variant="secondary">{stats.inLieu} in-lieu replacement{stats.inLieu === 1 ? '' : 's'}</Badge>
-        {stats.tentative > 0 && <Badge variant="outline" className="border-dashed">{stats.tentative} tentative (pending gazette)</Badge>}
-      </div>
+      <Tabs defaultValue="calendar" className="gap-4">
+        <TabsList>
+          <TabsTrigger value="calendar">Calendar</TabsTrigger>
+          <TabsTrigger value="gazetted">Gazetted selection</TabsTrigger>
+        </TabsList>
 
-      {/* Holiday list */}
-      <Card className="rounded-xl">
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-base">
-            <CalendarDays className="h-4 w-4 text-amber-600" />
-            {stateInfo(stateCode).name} — {year}
-          </CardTitle>
-          <CardDescription>
-            Effective calendar: gazetted days plus computed rest-day replacements.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          {effective.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No holiday data for this selection.</p>
-          ) : (
-            <>
-              {/* Desktop table */}
-              <div className="hidden md:block">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead className="w-[150px]">Date</TableHead>
-                      <TableHead>Holiday</TableHead>
-                      <TableHead className="w-[320px]">Badges</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {effective.map((h) => (
-                      <TableRow key={`${h.date}-${h.name}-${JSON.stringify(h.states)}`}>
-                        <TableCell className="font-medium">
-                          {fmtDate(h.date)}
-                          <span className="block text-xs font-normal text-muted-foreground">
-                            {new Date(`${h.date}T00:00:00`).toLocaleDateString('en-MY', { weekday: 'long' })}
-                          </span>
-                        </TableCell>
-                        <TableCell>
-                          {h.name}
-                          {h.nameMs && <span className="block text-xs text-muted-foreground">{h.nameMs}</span>}
-                        </TableCell>
-                        <TableCell><HolidayBadges h={h} /></TableCell>
+        <TabsContent value="calendar" className="space-y-6">
+        {/* Summary chips */}
+        <div className="flex flex-wrap gap-2 text-sm">
+          <Badge variant="secondary">{stats.total} holidays</Badge>
+          <Badge variant="secondary">{stats.compulsory} EA-compulsory</Badge>
+          <Badge variant="secondary">{stats.inLieu} in-lieu replacement{stats.inLieu === 1 ? '' : 's'}</Badge>
+          {stats.tentative > 0 && <Badge variant="outline" className="border-dashed">{stats.tentative} tentative (pending gazette)</Badge>}
+          {gazettedSet && (
+            <Badge className="bg-emerald-100 text-emerald-800 hover:bg-emerald-100 dark:bg-emerald-900/40 dark:text-emerald-200">
+              {gazettedSet.size} gazetted (published)
+            </Badge>
+          )}
+        </div>
+
+        {/* Holiday list */}
+        <Card className="rounded-xl">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <CalendarDays className="h-4 w-4 text-amber-600" />
+              {stateInfo(stateCode).name} — {year}
+            </CardTitle>
+            <CardDescription>
+              Effective calendar: gazetted days plus computed rest-day replacements.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {effective.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No holiday data for this selection.</p>
+            ) : (
+              <>
+                {/* Desktop table */}
+                <div className="hidden md:block">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead className="w-[150px]">Date</TableHead>
+                        <TableHead>Holiday</TableHead>
+                        <TableHead className="w-[320px]">Badges</TableHead>
                       </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
-              {/* Mobile cards */}
-              <div className="space-y-3 md:hidden">
-                {effective.map((h) => (
-                  <div key={`${h.date}-${h.name}-${JSON.stringify(h.states)}`} className="rounded-xl border p-3">
-                    <div className="flex items-baseline justify-between gap-2">
-                      <span className="text-sm font-medium">{h.name}</span>
-                      <span className="shrink-0 text-xs text-muted-foreground">{fmtDate(h.date)}</span>
+                    </TableHeader>
+                    <TableBody>
+                      {effective.map((h) => (
+                        <TableRow key={`${h.date}-${h.name}-${JSON.stringify(h.states)}`}>
+                          <TableCell className="font-medium">
+                            {fmtDate(h.date)}
+                            <span className="block text-xs font-normal text-muted-foreground">
+                              {new Date(`${h.date}T00:00:00`).toLocaleDateString('en-MY', { weekday: 'long' })}
+                            </span>
+                          </TableCell>
+                          <TableCell>
+                            {h.name}
+                            {h.nameMs && <span className="block text-xs text-muted-foreground">{h.nameMs}</span>}
+                          </TableCell>
+                          <TableCell><HolidayBadges h={h} gazetted={isGazetted(h)} /></TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+                {/* Mobile cards */}
+                <div className="space-y-3 md:hidden">
+                  {effective.map((h) => (
+                    <div key={`${h.date}-${h.name}-${JSON.stringify(h.states)}`} className="rounded-xl border p-3">
+                      <div className="flex items-baseline justify-between gap-2">
+                        <span className="text-sm font-medium">{h.name}</span>
+                        <span className="shrink-0 text-xs text-muted-foreground">{fmtDate(h.date)}</span>
+                      </div>
+                      <div className="mt-2"><HolidayBadges h={h} gazetted={isGazetted(h)} /></div>
                     </div>
-                    <div className="mt-2"><HolidayBadges h={h} /></div>
-                  </div>
+                  ))}
+                </div>
+              </>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Admin overrides — Admin/HR only (route guard lands with the auth integration wave) */}
+        <Card className="rounded-xl">
+          <CardHeader>
+            <CardTitle className="text-base">Custom holidays &amp; cuti peristiwa</CardTitle>
+            <CardDescription>
+              Company-declared holidays (e.g. cuti peristiwa, election day, company anniversary).
+              Overrides merge into the calendar above and apply to leave-day counting.
+            </CardDescription>
+          </CardHeader>
+          {!auth.isHROrAdmin ? (
+            <CardContent>
+              <p className="rounded-lg bg-muted/60 px-3 py-2 text-sm text-muted-foreground">
+                Custom holidays are managed by Admin / HR. Contact HR to add or remove a
+                company-declared holiday.
+              </p>
+            </CardContent>
+          ) : (
+          <CardContent className="space-y-4">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              <div className="space-y-2">
+                <Label htmlFor="ov-date">Date ({year})</Label>
+                <Input id="ov-date" type="date" value={newDate} onChange={(e) => setNewDate(e.target.value)} />
+              </div>
+              <div className="space-y-2 sm:col-span-1 lg:col-span-2">
+                <Label htmlFor="ov-name">Name</Label>
+                <Input
+                  id="ov-name"
+                  placeholder="e.g. Cuti Peristiwa — Company Family Day"
+                  value={newName}
+                  onChange={(e) => setNewName(e.target.value)}
+                />
+              </div>
+              <div className="flex items-end gap-2">
+                <Button onClick={onAddOverride} className="gap-1.5">
+                  <Plus className="h-4 w-4" /> Add holiday
+                </Button>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
+              <label className="flex items-center gap-2 text-sm">
+                <Checkbox
+                  checked={newNational}
+                  onCheckedChange={(c) => setNewNational(c === true)}
+                />
+                National (all states)
+              </label>
+              <label className="flex items-center gap-2 text-sm">
+                <Checkbox
+                  checked={newCompulsory}
+                  onCheckedChange={(c) => setNewCompulsory(c === true)}
+                />
+                Counts toward the 11 EA-compulsory days
+              </label>
+            </div>
+
+            {!newNational && (
+              <div className="grid grid-cols-2 gap-2 rounded-xl border p-3 sm:grid-cols-4">
+                {states.map((s) => (
+                  <label key={s.code} className="flex items-center gap-2 text-xs">
+                    <Checkbox
+                      checked={newStates.includes(s.code)}
+                      onCheckedChange={(c) => toggleNewState(s.code, c === true)}
+                    />
+                    {s.name}
+                  </label>
                 ))}
               </div>
-            </>
-          )}
-        </CardContent>
-      </Card>
+            )}
 
-      {/* Admin overrides — Admin/HR only (route guard lands with the auth integration wave) */}
-      <Card className="rounded-xl">
-        <CardHeader>
-          <CardTitle className="text-base">Custom holidays &amp; cuti peristiwa</CardTitle>
-          <CardDescription>
-            Company-declared holidays (e.g. cuti peristiwa, election day, company anniversary).
-            Overrides merge into the calendar above and apply to leave-day counting.
-          </CardDescription>
-        </CardHeader>
-        {!auth.isHROrAdmin ? (
-          <CardContent>
-            <p className="rounded-lg bg-muted/60 px-3 py-2 text-sm text-muted-foreground">
-              Custom holidays are managed by Admin / HR. Contact HR to add or remove a
-              company-declared holiday.
-            </p>
+            {formError && (
+              <Alert variant="destructive">
+                <AlertDescription>{formError}</AlertDescription>
+              </Alert>
+            )}
+
+            <Separator />
+
+            {overrides.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No custom holidays for {year} yet.</p>
+            ) : (
+              <ul className="space-y-2">
+                {overrides.map((h) => (
+                  <li key={h.id} className="flex items-center gap-3 rounded-xl border p-3">
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-medium">{h.name}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {fmtDate(h.date)} · {h.states === 'ALL' ? 'All states' : (h.states as StateCode[]).join(', ')}
+                        {h.isCompulsoryEA ? ' · EA-compulsory' : ''}
+                      </p>
+                    </div>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      aria-label={`Delete ${h.name}`}
+                      onClick={() => onDeleteOverride(h)}
+                    >
+                      <Trash2 className="h-4 w-4 text-rose-600" />
+                    </Button>
+                  </li>
+                ))}
+              </ul>
+            )}
           </CardContent>
-        ) : (
-        <CardContent className="space-y-4">
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            <div className="space-y-2">
-              <Label htmlFor="ov-date">Date ({year})</Label>
-              <Input id="ov-date" type="date" value={newDate} onChange={(e) => setNewDate(e.target.value)} />
-            </div>
-            <div className="space-y-2 sm:col-span-1 lg:col-span-2">
-              <Label htmlFor="ov-name">Name</Label>
-              <Input
-                id="ov-name"
-                placeholder="e.g. Cuti Peristiwa — Company Family Day"
-                value={newName}
-                onChange={(e) => setNewName(e.target.value)}
-              />
-            </div>
-            <div className="flex items-end gap-2">
-              <Button onClick={onAddOverride} className="gap-1.5">
-                <Plus className="h-4 w-4" /> Add holiday
-              </Button>
-            </div>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
-            <label className="flex items-center gap-2 text-sm">
-              <Checkbox
-                checked={newNational}
-                onCheckedChange={(c) => setNewNational(c === true)}
-              />
-              National (all states)
-            </label>
-            <label className="flex items-center gap-2 text-sm">
-              <Checkbox
-                checked={newCompulsory}
-                onCheckedChange={(c) => setNewCompulsory(c === true)}
-              />
-              Counts toward the 11 EA-compulsory days
-            </label>
-          </div>
-
-          {!newNational && (
-            <div className="grid grid-cols-2 gap-2 rounded-xl border p-3 sm:grid-cols-4">
-              {states.map((s) => (
-                <label key={s.code} className="flex items-center gap-2 text-xs">
-                  <Checkbox
-                    checked={newStates.includes(s.code)}
-                    onCheckedChange={(c) => toggleNewState(s.code, c === true)}
-                  />
-                  {s.name}
-                </label>
-              ))}
-            </div>
           )}
+        </Card>
+        </TabsContent>
 
-          {formError && (
-            <Alert variant="destructive">
-              <AlertDescription>{formError}</AlertDescription>
-            </Alert>
-          )}
-
-          <Separator />
-
-          {overrides.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No custom holidays for {year} yet.</p>
-          ) : (
-            <ul className="space-y-2">
-              {overrides.map((h) => (
-                <li key={h.id} className="flex items-center gap-3 rounded-xl border p-3">
-                  <div className="min-w-0 flex-1">
-                    <p className="text-sm font-medium">{h.name}</p>
-                    <p className="text-xs text-muted-foreground">
-                      {fmtDate(h.date)} · {h.states === 'ALL' ? 'All states' : (h.states as StateCode[]).join(', ')}
-                      {h.isCompulsoryEA ? ' · EA-compulsory' : ''}
-                    </p>
-                  </div>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    aria-label={`Delete ${h.name}`}
-                    onClick={() => onDeleteOverride(h)}
-                  >
-                    <Trash2 className="h-4 w-4 text-rose-600" />
-                  </Button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </CardContent>
-        )}
-      </Card>
+        <TabsContent value="gazetted">
+          {/* Remounted per year+state so the draft initializes from the stored record */}
+          <GazettedSelectionPanel
+            key={`${year}:${stateCode}`}
+            year={year}
+            state={stateCode}
+            actor={auth.actor}
+            canManage={auth.isHROrAdmin}
+          />
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }
