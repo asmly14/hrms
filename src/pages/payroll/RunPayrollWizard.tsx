@@ -13,12 +13,13 @@ import { useCollection } from '@/lib/db';
 import { useRole } from '@/lib/useRole';
 import { useAuthSafe } from '@/lib/useAuthSafe';
 import {
-  inPayrollPeriod, payrollPeriodFor, runPayroll, type PayrollResult,
+  inPayrollPeriod, payrollPeriodFor, runPayroll, workedDaysInPeriod, workedHoursInPeriod,
+  type PayrollResult,
 } from '@/lib/payrollEngine';
 import { getPayrollCutoff } from '@/lib/appSettings';
 import { MAX_OT_HOURS_MONTH, MINIMUM_WAGE } from '@/lib/statutory';
 import { fmtDate, fmtRM, monthKey, round2 } from '@/lib/utils';
-import type { AttendanceRecord, Claim, Employee, LeaveRequest } from '@/lib/types';
+import type { AttendanceRecord, Claim, Employee, LeaveRequest, Settings as CompanySettings } from '@/lib/types';
 import { monthLabel, overlapDaysInMonth } from './helpers';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -54,6 +55,8 @@ interface Preflight {
   claimsCount: number;
   claimsTotal: number;
   unpaidLeaveDays: number;
+  /** Daily/hourly-rated staff and their attendance-counted worked quantity. */
+  variablePaid: { emp: Employee; salaryType: 'daily' | 'hourly'; qty: number; unit: string }[];
   /** Cut-off applied to this run (Company.config.payrollCutoffDay layering). */
   cutoffDay: number;
   /** Inclusive window the run covers for OT/claims: (prev cut-off, cut-off]. */
@@ -75,6 +78,7 @@ export default function RunPayrollWizard({ open, onOpenChange, onCompleted }: Wi
   const { items: attendance } = useCollection<AttendanceRecord>('attendance');
   const { items: leaves } = useCollection<LeaveRequest>('leaves');
   const { items: claims } = useCollection<Claim>('claims');
+  const { items: settingsItems } = useCollection<CompanySettings>('settings');
 
   const [step, setStep] = useState(1);
   const [month, setMonth] = useState(monthKey());
@@ -152,6 +156,16 @@ export default function RunPayrollWizard({ open, onOpenChange, onCompleted }: Wi
       )
       .reduce((s, l) => s + overlapDaysInMonth(l.startDate, l.endDate, month), 0);
     const otRecords = [...otByEmp.entries()].filter(([id]) => chosenIds.has(id));
+    // Daily/hourly-rated staff: worked quantity counted from attendance in
+    // the cut-off window (mirrors the engine's counting rule).
+    const stdHours = settingsItems[0]?.standardDailyHours ?? 8;
+    const variablePaid = chosen
+      .filter((e) => e.salaryType === 'daily' || e.salaryType === 'hourly')
+      .map((e) =>
+        e.salaryType === 'daily'
+          ? { emp: e, salaryType: 'daily' as const, qty: workedDaysInPeriod(attendance, e.id, period), unit: 'day(s)' }
+          : { emp: e, salaryType: 'hourly' as const, qty: workedHoursInPeriod(attendance, e.id, period, stdHours), unit: 'hour(s)' },
+      );
     return {
       belowMinWage,
       otOverCap,
@@ -162,6 +176,7 @@ export default function RunPayrollWizard({ open, onOpenChange, onCompleted }: Wi
       claimsCount: monthClaims.length,
       claimsTotal: round2(monthClaims.reduce((s, c) => s + c.amount, 0)),
       unpaidLeaveDays,
+      variablePaid,
       cutoffDay,
       periodStart: period.start,
       periodEnd: period.end,
@@ -170,7 +185,7 @@ export default function RunPayrollWizard({ open, onOpenChange, onCompleted }: Wi
       deferredClaimsCount: deferredClaims.length,
       deferredClaimsTotal: round2(deferredClaims.reduce((s, c) => s + c.amount, 0)),
     };
-  }, [eligible, selectedIds, attendance, claims, leaves, month]);
+  }, [eligible, selectedIds, attendance, claims, leaves, month, settingsItems]);
 
   const execute = () => {
     const ids = eligible.filter((e) => selectedIds.has(e.id)).map((e) => e.id);
@@ -387,6 +402,16 @@ export default function RunPayrollWizard({ open, onOpenChange, onCompleted }: Wi
               neutral
               items={preflight.foreignWorkers.map(
                 (e) => `${e.name}: EPF at the foreign-worker rate applies (mandatory since Oct 2025)`,
+              )}
+            />
+            <CheckItem
+              ok={preflight.variablePaid.length === 0}
+              title="Daily / hourly-paid staff"
+              okText="Everyone in this run is monthly-paid."
+              neutral
+              items={preflight.variablePaid.map(
+                (x) =>
+                  `${x.emp.name}: ${x.salaryType}-rated — ${x.qty} ${x.unit} counted from attendance in the cut-off window`,
               )}
             />
           </div>

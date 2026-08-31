@@ -136,6 +136,28 @@ export interface FixedAllowance {
 }
 
 /**
+ * How an employee's basic pay is derived (kakitangan-style salary types).
+ *  - 'monthly' — fixed monthly salary, prorated for joiners/leavers (default)
+ *  - 'daily'   — dailyRate × days worked in the payroll cut-off window
+ *  - 'hourly'  — hourlyRate × hours worked in the payroll cut-off window
+ * Rate fallbacks when unset: daily = baseSalary ÷ 26 (EA 1955 s.60I ORP),
+ * hourly = baseSalary ÷ 26 ÷ 8 (s.60A(3) normal hours).
+ */
+export type SalaryType = 'monthly' | 'daily' | 'hourly';
+
+/**
+ * Statutory wage-base tags for a pay line — which scheme bases the line feeds
+ * (docs/research/statutory-rates.md §6 tagging matrix). HRD levy intentionally
+ * has no tag: it stays on basic + fixed allowances only.
+ */
+export interface WageBaseTags {
+  epf: boolean;
+  socso: boolean;
+  eis: boolean;
+  pcb: boolean;
+}
+
+/**
  * TP3-style year-to-date figures from a previous employer (same year of
  * assessment). Captured by the Employees new-hire wizard; consumed by
  * payrollEngine to seed the PCB annualization basis for the first recorded
@@ -182,6 +204,13 @@ export interface Employee {
   resignDate?: string;
   /** TP3 prior-employer YTD carry-in (see YTDCarryIn) — seeds PCB/YTD chains. */
   ytdCarryIn?: YTDCarryIn;
+  // ── Salary type (additive; absent = 'monthly') ──
+  /** Pay basis for the employee's basic — see SalaryType. */
+  salaryType?: SalaryType;
+  /** RM per day for salaryType 'daily'; fallback baseSalary ÷ 26. */
+  dailyRate?: number;
+  /** RM per hour for salaryType 'hourly'; fallback baseSalary ÷ 26 ÷ 8. */
+  hourlyRate?: number;
 }
 
 export type AttendanceStatus =
@@ -297,6 +326,9 @@ export interface PayslipLine {
   kind: PayslipLineKind;
   /** true = excluded from EPF/SOCSO/EIS/PCB wage bases (e.g. claim reimbursements). */
   nonStatutory?: boolean;
+  /** true = non-cash taxable benefit (BIK/VOLA) — feeds the PCB base only,
+   *  never gross or net pay; rendered in its own payslip block. */
+  nonCash?: boolean;
 }
 
 /** Preset ad-hoc adjustment types offered by the per-employee payslip editor. */
@@ -304,9 +336,14 @@ export type AdjustmentPreset = 'cp38' | 'zakat' | 'ptptn' | 'custom';
 
 /**
  * Ad-hoc per-payslip adjustment entered via the kakitangan-style editor before
- * a run is finalized. Earnings join the gross (statutory wage bases: SOCSO/EIS
- * + PCB additional remuneration; EPF/HRD base unchanged). Deductions reduce
- * net pay only — they never touch EPF/SOCSO/EIS/PCB bases.
+ * a run is finalized. Earnings join the gross; deductions reduce net pay only —
+ * they never touch EPF/SOCSO/EIS/PCB bases.
+ *
+ * Wage-base tags (docs/research/statutory-rates.md §6): a TAGGED earning line
+ * feeds exactly the scheme bases its tags mark (e.g. bonus: EPF ✓ SOCSO ✗
+ * EIS ✗ PCB ✓). An UNTAGGED earning line keeps the legacy behaviour for
+ * backward compatibility: SOCSO/EIS base ✓, EPF base ✗, PCB via the
+ * additional-remuneration (bonus) mechanism.
  */
 export interface PayslipAdjustment {
   id: string;
@@ -314,6 +351,49 @@ export interface PayslipAdjustment {
   preset: AdjustmentPreset;
   label: string;
   amount: number;       // RM, positive
+  // ── Additional-earnings catalog metadata (additive) ──
+  /** Key of the lib/payItems.ts preset this line came from ('custom' when keyed by hand). */
+  itemKey?: string;
+  /** Per-line statutory wage-base tags; absent = legacy behaviour (see above). */
+  tags?: WageBaseTags;
+  /** true = taxed via the LHDN additional-remuneration (bonus) mechanism
+   *  instead of normal monthly remuneration (bonus/commission/director fees). */
+  additionalRemuneration?: boolean;
+  /** true = paid in net but excluded from gross and all wage bases
+   *  (claims/expense reimbursements) — mirrors the claims mechanism. */
+  nonStatutory?: boolean;
+  /** true = non-cash taxable benefit (BIK/VOLA): excluded from gross AND net;
+   *  when tagged pcb it still feeds the PCB annualization base (TP2). */
+  nonCash?: boolean;
+}
+
+/** The four statutory opt-out switches stored on a payslip. */
+export type StatutoryOptOutKey = 'epf' | 'socso' | 'eis' | 'pcb';
+
+/**
+ * Full per-employee edit state for a draft payslip (kakitangan editor).
+ * Replaces the legacy adjustments-only edit; every field is optional and
+ * falls back to the employee/company defaults when absent.
+ */
+export interface PayslipEditInput {
+  /** Ad-hoc earning/deduction lines (CP38 / Zakat / PTPTN / pay-items catalog). */
+  adjustments?: PayslipAdjustment[];
+  /** Per-run salary-type override (monthly/daily/hourly); absent = employee's. */
+  salaryType?: SalaryType;
+  /** Per-run rate override (RM/month | RM/day | RM/hour per salaryType). */
+  rate?: number;
+  /** Per-run worked-quantity override: months fraction (monthly), days (daily)
+   *  or hours (hourly); absent = engine-derived (proration / attendance count). */
+  workedQty?: number;
+  /** 'Full amount' override — directly replaces the computed basic for this run. */
+  basicOverride?: number;
+  /** Statutory opt-outs (employee AND employer shares are zeroed). */
+  excludeEpf?: boolean;
+  excludeSocso?: boolean;
+  excludeEis?: boolean;
+  excludePcb?: boolean;
+  /** Stored reason per opted-out scheme (compliance trail). */
+  optOutReasons?: Partial<Record<StatutoryOptOutKey, string>>;
 }
 
 export interface Payslip {
@@ -360,6 +440,45 @@ export interface Payslip {
   adjustmentEarnings?: number;
   /** Sum of deduction adjustments (already deducted from netPay). */
   adjustmentDeductions?: number;
+  /** Sum of non-statutory cash earning adjustments (paid in net, like claims;
+   *  NOT included in grossPay). Absent on legacy payslips. */
+  adjustmentReimbursements?: number;
+  /** Sum of non-cash taxable benefit lines (BIK/VOLA) — feeds PCB only. */
+  adjustmentNonCash?: number;
+  // ── Salary type & basic overrides (additive; absent on legacy payslips) ──
+  /** Salary type actually applied to this payslip's basic. */
+  salaryTypeUsed?: SalaryType;
+  /** Rate applied (RM/month | RM/day | RM/hour per salaryTypeUsed). */
+  rateUsed?: number;
+  /** Worked quantity applied: months fraction / days / hours. */
+  workedQty?: number;
+  /** Unit of workedQty. */
+  workedUnit?: 'month' | 'day' | 'hour';
+  /** 'Full amount' override that replaced the computed basic, when used. */
+  basicOverride?: number;
+  // ── Per-run override markers (set only when the draft editor forced them;
+  //  they let the editor round-trip its exact edit state) ──
+  /** Salary type forced for this run (absent = employee default applied). */
+  salaryTypeOverride?: SalaryType;
+  /** Rate forced for this run (absent = employee rate / statutory fallback). */
+  rateOverride?: number;
+  /** Worked quantity forced for this run (absent = engine-derived). */
+  workedQtyOverride?: number;
+  // ── Statutory wage bases actually used (transparency / audit) ──
+  epfBase?: number;
+  socsoBase?: number;
+  eisBase?: number;
+  /** Normal-remuneration PCB base this month (additional remuneration excluded). */
+  pcbBase?: number;
+  /** Additional remuneration taxed via the LHDN bonus mechanism this month. */
+  pcbAdditional?: number;
+  // ── Statutory opt-outs (employee + employer shares zeroed) ──
+  excludeEpf?: boolean;
+  excludeSocso?: boolean;
+  excludeEis?: boolean;
+  excludePcb?: boolean;
+  /** Stored reason per opted-out scheme. */
+  optOutReasons?: Partial<Record<StatutoryOptOutKey, string>>;
   /** ISO datetime when this payslip was marked as distributed to the employee
    *  (batch distribution on the BatchPayslips page); absent = not yet handed out. */
   distributedAt?: string;

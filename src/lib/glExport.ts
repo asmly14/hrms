@@ -33,6 +33,7 @@
  * Balance identity (holds per payslip, therefore per run):
  *   basic + allowances + OT + otherEarnings = grossPay
  *   netPay = grossPay − eeStatutory − pcb − deductionAdjustments + claimsTotal
+ *            (claimsExpense includes non-statutory cash reimbursement lines)
  *   ⇒ debits (gross + claims + erStatutory + hrd) ≡ credits
  * buildGLJournal asserts debitTotal === creditTotal and throws otherwise, so
  * an unbalanced journal can never reach an export file.
@@ -330,7 +331,10 @@ export function slipGLAmounts(p: Payslip): SlipGLAmounts {
     wagesAllowance: p.allowances,
     wagesOT: p.otPay,
     otherEarnings: round2(p.adjustmentEarnings ?? 0),
-    claimsExpense: p.claimsTotal,
+    // Non-statutory cash earning lines (pay-items catalog reimbursements)
+    // ride the claims expense line — same GL treatment, keeps the journal
+    // balancing when the editor paid a reimbursement outside gross.
+    claimsExpense: round2(p.claimsTotal + (p.adjustmentReimbursements ?? 0)),
     epfEmployerExpense: p.epfEmployer,
     socsoEmployerExpense: p.socsoEmployer,
     eisEmployerExpense: p.eisEmployer,

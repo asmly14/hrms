@@ -1,13 +1,41 @@
 /**
  * Payroll engine — runs a whole month end-to-end and persists results.
  *
+ * Salary types (Employee.salaryType, per-run override in the draft editor):
+ *  - monthly — fixed monthly salary; mid-month joiner/leaver proration and
+ *    unpaid-leave deduction per the company's proration method (below).
+ *  - daily   — dailyRate × worked days counted from attendance in the run's
+ *    cut-off window (fallback rate baseSalary ÷ 26, EA 1955 s.60I).
+ *  - hourly  — hourlyRate × worked base hours counted from attendance in the
+ *    window (fallback baseSalary ÷ 26 ÷ 8). Approved OT hours are NOT base
+ *    hours — they pay separately through the OT mechanism (never double-paid).
+ *  Attendance counting rule: status 'present' = 1 day / standardDailyHours;
+ *  'half-day' = 0.5 day / half the standard hours; a 'rest-day' or 'holiday'
+ *  record carrying approved OT = 1 worked day (0 base hours — its OT hours
+ *  pay via OT); 'absent'/'leave' = 0. Daily/hourly employees get no separate
+ *  unpaid-leave deduction — unworked days are simply unpaid.
+ *  A payslip-level `basicOverride` ('Full amount') replaces the computed
+ *  basic outright for that run (audit-logged, shown as overridden).
+ *
  * Wage-base tagging per scheme (docs/research/statutory-rates.md §6):
- *  - EPF base   = basic (after proration + unpaid-leave) + fixed allowances   (OT & claims excluded)
+ *  - EPF base   = basic (after proration + unpaid-leave) + fixed allowances
+ *                 + adjustment earning lines TAGGED epf                    (OT excluded)
  *  - SOCSO/EIS  = gross incl. OT + ad-hoc earning adjustments               (claims excluded)
+ *                 — tagged lines join only when their socso/eis tag is on
  *  - HRD levy   = basic (after proration + unpaid-leave) + fixed allowances   (OT/bonus excluded)
- *  - PCB        = annualized on the gross; ad-hoc earning adjustments are
- *                 taxed as additional remuneration (LHDN bonus mechanism)
- * Claims reimbursements are paid in net but flagged nonStatutory.
+ *  - PCB        = annualized on the normal-remuneration base (basic + fixed
+ *                 allowances + OT + pcb-tagged normal lines + non-cash BIK);
+ *                 additional remuneration (bonus/commission/director fees and
+ *                 legacy untagged lines) is taxed via the LHDN aggregate
+ *                 (bonus) mechanism, in full, this month.
+ *  Backward compatibility: UNTAGGED earning lines keep the legacy behaviour —
+ *  SOCSO/EIS bases ✓, EPF base ✗, PCB via the bonus mechanism with the legacy
+ *  gross-inclusive annualization (unchanged figures for pre-tag payslips).
+ * Claims reimbursements are paid in net but flagged nonStatutory; BIK/VOLA
+ * lines are flagged nonCash (PCB base only — never gross or net).
+ * Statutory opt-outs (excludeEpf/Socso/Eis/Pcb) zero BOTH the employee and
+ * employer shares of that scheme for the run and are recorded on the payslip
+ * with their reason; the payslip prints a zero '— opted out (reason)' line.
  *
  * Proration (lib/workdays.ts): mid-month joiners/leavers get prorated basic +
  * fixed allowances, and unpaid leave is deducted on the SAME basis — the
@@ -53,7 +81,8 @@ import {
 import { ageFromDob, round2 } from './utils';
 import type {
   AttendanceRecord, Claim, Employee, LeaveRequest, PayrollProrationMethod,
-  PayrollRun, Payslip, PayslipAdjustment, PayslipLine, YTDCarryIn,
+  PayrollRun, Payslip, PayslipAdjustment, PayslipEditInput, PayslipLine, SalaryType,
+  Settings as CompanySettings, StatutoryOptOutKey, YTDCarryIn,
 } from './types';
 
 export interface PayrollResult {
@@ -102,6 +131,49 @@ export function payrollPeriodFor(month: string, cutoffDay: number): PayrollPerio
 /** True when an ISO date falls inside the period (inclusive both ends). */
 export function inPayrollPeriod(dateISO: string, period: Pick<PayrollPeriod, 'start' | 'end'>): boolean {
   return dateISO >= period.start && dateISO <= period.end;
+}
+
+/**
+ * Worked days in the cut-off window for DAILY-rated employees.
+ * Counting rule: status 'present' = 1 day; 'half-day' = 0.5 day; a 'rest-day'
+ * or 'holiday' record carrying approved OT counts 1 worked day (the employee
+ * reported for work); 'absent' / 'leave' records never count.
+ */
+export function workedDaysInPeriod(
+  attendance: AttendanceRecord[],
+  employeeId: string,
+  period: Pick<PayrollPeriod, 'start' | 'end'>,
+): number {
+  let days = 0;
+  for (const a of attendance) {
+    if (a.employeeId !== employeeId || !inPayrollPeriod(a.date, period)) continue;
+    if (a.status === 'present') days += 1;
+    else if (a.status === 'half-day') days += 0.5;
+    else if ((a.status === 'rest-day' || a.status === 'holiday') && a.otApproved && a.otHours > 0) days += 1;
+  }
+  return days;
+}
+
+/**
+ * Worked BASE hours in the cut-off window for HOURLY-rated employees:
+ * 'present' = standardDailyHours (Settings, default 8); 'half-day' = half of
+ * that; everything else = 0. Approved OT hours are deliberately NOT base
+ * hours — they are paid separately through the OT mechanism (1.5×/2×/3×), so
+ * they can never be double-paid.
+ */
+export function workedHoursInPeriod(
+  attendance: AttendanceRecord[],
+  employeeId: string,
+  period: Pick<PayrollPeriod, 'start' | 'end'>,
+  standardDailyHours = 8,
+): number {
+  let hours = 0;
+  for (const a of attendance) {
+    if (a.employeeId !== employeeId || !inPayrollPeriod(a.date, period)) continue;
+    if (a.status === 'present') hours += standardDailyHours;
+    else if (a.status === 'half-day') hours += standardDailyHours / 2;
+  }
+  return hours;
 }
 
 export interface RunPayrollOptions {
@@ -267,6 +339,9 @@ interface PayslipCtx {
   leaves: LeaveRequest[];
   claims: Claim[];
   numLocal: number;
+  /** Standard daily working hours (Settings.standardDailyHours, default 8) —
+   *  base-hours unit for hourly-rated worked-hour counting. */
+  standardDailyHours: number;
   warnings: string[];
 }
 
@@ -283,6 +358,8 @@ function buildCtx(month: string, runId: string, method: PayrollProrationMethod, 
     numLocal: getCollection<Employee>('employees').filter(
       (e) => !e.isForeignWorker && e.status !== 'resigned',
     ).length,
+    standardDailyHours:
+      getCollection<CompanySettings>('settings')[0]?.standardDailyHours ?? 8,
     warnings,
   };
 }
@@ -290,40 +367,97 @@ function buildCtx(month: string, runId: string, method: PayrollProrationMethod, 
 /**
  * Compute one employee's payslip for the month. Pure w.r.t. the collections
  * snapshotted in `ctx` (plus stored prior-month payslips for YTD/PCB) — used
- * by runPayroll for every employee and by the draft editor (adjust / reset)
- * for a single employee.
+ * by runPayroll for every employee and by the draft editor (adjust / reset /
+ * preview) for a single employee. `edit` carries the kakitangan per-run
+ * overrides: adjustment lines, salary type / rate / worked quantity, the
+ * basic 'Full amount' override and statutory opt-outs; the empty edit
+ * reproduces runPayroll's untouched output.
  */
-function computePayslip(emp: Employee, ctx: PayslipCtx, adjustments: PayslipAdjustment[] = []): Payslip {
+function computePayslip(emp: Employee, ctx: PayslipCtx, edit: PayslipEditInput = {}): Payslip {
   const { month, monthIndex, method } = ctx;
   const age = ageFromDob(emp.dateOfBirth, new Date(`${month}-28T00:00:00`));
   const fixedAllowances = emp.fixedAllowances ?? [];
+  const adjustments = edit.adjustments ?? [];
+  const salaryType: SalaryType = edit.salaryType ?? emp.salaryType ?? 'monthly';
 
-  // ── Joiner/leaver proration (basic + fixed allowances, same factor) ──
-  const basicPr = prorate(emp.baseSalary, emp, month, method);
-  const factor = basicPr.factor;
+  // ── Basic pay per salary type ──
+  // Joiner/leaver employment-window factor: drives fixed-allowance proration
+  // for every salary type, and monthly basic unless 'Worked: N month(s)'
+  // overrides it. Rates: per-run edit wins, then the employee record, then
+  // the statutory fallbacks (ORP ÷ 26; hourly ÷ 26 ÷ 8).
+  const basicPr = prorate(edit.rate ?? emp.baseSalary, emp, month, method);
+  const employmentFactor = basicPr.factor;
+  const monthlyRate = edit.rate ?? emp.baseSalary;
+  const dailyRate = edit.rate ?? emp.dailyRate ?? emp.baseSalary / 26;
+  const hourlyRate = edit.rate ?? emp.hourlyRate ?? (emp.baseSalary / 26) / 8;
+
+  let basicComputed: number;
+  let factor: number;             // recorded proration/employment factor
+  let workedQty: number;          // months fraction | days | hours
+  let workedUnit: 'month' | 'day' | 'hour';
+  let rateUsed: number;
+  let countedQty: number | null = null; // attendance-derived qty (daily/hourly)
+  let unpaidDays = 0;
+  let unpaidDeduction = 0;
+
+  if (salaryType === 'monthly') {
+    // ── Joiner/leaver proration (or the 'Worked: N month(s)' override) ──
+    factor = edit.workedQty ?? employmentFactor;
+    // ── Unpaid leave on the SAME basis as the proration method ──
+    unpaidDays = unpaidLeaveDaysInMonth(ctx.leaves, emp.id, month, emp.state, method);
+    const dailyForUnpaid =
+      method === 'calendar' ? monthlyRate / calendarDaysInMonth(month) :
+      method === 'working-days' ? monthlyRate / Math.max(1, workingDaysInMonth(month, emp.state)) :
+      orpFromMonthly(monthlyRate);
+    unpaidDeduction = round2(unpaidDays * dailyForUnpaid);
+    basicComputed = round2(Math.max(0, round2(monthlyRate * factor) - unpaidDeduction));
+    workedQty = round2(factor * 100) / 100;
+    workedUnit = 'month';
+    rateUsed = monthlyRate;
+  } else if (salaryType === 'daily') {
+    // ── Daily: rate × worked days counted from attendance in the window.
+    // No separate unpaid-leave deduction — unworked days are simply unpaid. ──
+    countedQty = workedDaysInPeriod(ctx.attendance, emp.id, ctx.period);
+    workedQty = edit.workedQty ?? countedQty;
+    workedUnit = 'day';
+    rateUsed = dailyRate;
+    basicComputed = round2(dailyRate * workedQty);
+    factor = employmentFactor;
+  } else {
+    // ── Hourly: rate × worked BASE hours. Approved OT hours pay separately
+    // through the OT mechanism below — never double-paid as base hours. ──
+    countedQty = workedHoursInPeriod(ctx.attendance, emp.id, ctx.period, ctx.standardDailyHours);
+    workedQty = edit.workedQty ?? countedQty;
+    workedUnit = 'hour';
+    rateUsed = hourlyRate;
+    basicComputed = round2(hourlyRate * workedQty);
+    factor = employmentFactor;
+  }
+
+  // ── 'Full amount' override: replaces the computed basic outright ──
+  const hasBasicOverride =
+    edit.basicOverride !== undefined && Number.isFinite(edit.basicOverride) && edit.basicOverride >= 0;
+  const basicPay = hasBasicOverride ? round2(edit.basicOverride!) : basicComputed;
+
+  // ── Fixed allowances, prorated by the same factor ──
   const proratedAllowances = fixedAllowances.map((a) => ({
     ...a,
     amount: round2(a.amount * factor),
   }));
   const allowanceTotal = round2(proratedAllowances.reduce((s, a) => s + a.amount, 0));
 
-  // ── Unpaid leave on the SAME basis as the proration method ──
-  const unpaidDays = unpaidLeaveDaysInMonth(ctx.leaves, emp.id, month, emp.state, method);
-  const dailyRate =
-    method === 'calendar' ? emp.baseSalary / calendarDaysInMonth(month) :
-    method === 'working-days' ? emp.baseSalary / Math.max(1, workingDaysInMonth(month, emp.state)) :
-    orpFromMonthly(emp.baseSalary);
-  const unpaidDeduction = round2(unpaidDays * dailyRate);
-  const basicPay = round2(Math.max(0, basicPr.amount - unpaidDeduction));
-
   // ── Approved OT from attendance, split by day type (1.5×/2×/3×) ──
   // Cut-off window: only records dated ≤ the company's cut-off day of the
   // wage month feed this run; later-dated records roll into the next run.
+  // HRP follows the salary type: hourly rate as-is, daily ÷ 8, monthly ÷26÷8.
   const otRecords = ctx.attendance.filter(
     (a) => a.employeeId === emp.id && inPayrollPeriod(a.date, ctx.period) && a.otApproved && a.otHours > 0,
   );
   const otHours = round2(otRecords.reduce((s, a) => s + a.otHours, 0));
-  const hrp = hourlyFromMonthly(emp.baseSalary);
+  const hrp =
+    salaryType === 'hourly' ? hourlyRate :
+    salaryType === 'daily' ? dailyRate / 8 :
+    hourlyFromMonthly(monthlyRate);
   const otBy = (t: 'normal' | 'rest' | 'holiday') =>
     round2(otRecords.filter((a) => a.otDayType === t).reduce((s, a) => s + calcOT(hrp, a.otHours, t), 0));
   const otNormal = otBy('normal');
@@ -341,22 +475,54 @@ function computePayslip(emp: Employee, ctx: PayslipCtx, adjustments: PayslipAdju
   const claimsTotal = round2(monthClaims.reduce((s, c) => s + c.amount, 0));
 
   // ── Ad-hoc editor adjustments (draft runs) ──
-  // Earnings join the gross (SOCSO/EIS base + PCB additional remuneration);
-  // deductions reduce net pay only. Neither touches the EPF/HRD base.
+  // Earnings split three ways: gross-joining wages, non-statutory cash
+  // reimbursements (paid in net, like claims), and non-cash BIK/VOLA (PCB
+  // base only — never gross or net). Deductions reduce net pay only.
   const cleanAdjustments = adjustments.filter((a) => Number.isFinite(a.amount) && a.amount > 0);
-  const adjustmentEarnings = round2(
-    cleanAdjustments.filter((a) => a.kind === 'earning').reduce((s, a) => s + a.amount, 0),
+  const earningLines = cleanAdjustments.filter((a) => a.kind === 'earning');
+  const grossEarnings = earningLines.filter((a) => !a.nonStatutory && !a.nonCash);
+  const adjustmentEarnings = round2(grossEarnings.reduce((s, a) => s + a.amount, 0));
+  const adjustmentReimbursements = round2(
+    earningLines.filter((a) => a.nonStatutory && !a.nonCash).reduce((s, a) => s + a.amount, 0),
+  );
+  const adjustmentNonCash = round2(
+    earningLines.filter((a) => a.nonCash).reduce((s, a) => s + a.amount, 0),
   );
   const adjustmentDeductions = round2(
     cleanAdjustments.filter((a) => a.kind === 'deduction').reduce((s, a) => s + a.amount, 0),
   );
 
-  // ── Statutory bases (computed on the prorated wages actually paid) ──
+  // ── Statutory wage bases, accumulated per line tag (research doc §6) ──
+  // UNTAGGED earning lines keep the legacy behaviour (SOCSO/EIS ✓, EPF ✗,
+  // PCB additional remuneration) so pre-tag figures never drift; TAGGED
+  // lines feed exactly the bases their tags mark.
+  const untagged = grossEarnings.filter((a) => !a.tags);
+  const tagged = grossEarnings.filter((a) => a.tags);
+  const untaggedTotal = round2(untagged.reduce((s, a) => s + a.amount, 0));
+  const taggedSum = (pick: (a: PayslipAdjustment) => boolean) =>
+    round2(tagged.filter(pick).reduce((s, a) => s + a.amount, 0));
+
   const grossPay = round2(basicPay + allowanceTotal + otPay + adjustmentEarnings);
-  const epfWages = round2(basicPay + allowanceTotal); // OT excluded from EPF (s.2 EPF Act)
-  const epf = calcEPF(epfWages, age, !emp.isForeignWorker, emp.isForeignWorker);
-  const socso = calcSOCSO(grossPay, age);
-  const eis = calcEIS(grossPay, age, !emp.isForeignWorker);
+  const epfBase = round2(basicPay + allowanceTotal + taggedSum((a) => a.tags!.epf));
+  const socsoBase = round2(basicPay + allowanceTotal + otPay + untaggedTotal + taggedSum((a) => a.tags!.socso));
+  const eisBase = round2(basicPay + allowanceTotal + otPay + untaggedTotal + taggedSum((a) => a.tags!.eis));
+
+  // ── Statutory opt-outs: zero BOTH shares of the opted-out scheme ──
+  const excludeEpf = edit.excludeEpf === true;
+  const excludeSocso = edit.excludeSocso === true;
+  const excludeEis = edit.excludeEis === true;
+  const excludePcb = edit.excludePcb === true;
+
+  const epf = excludeEpf
+    ? { employee: 0, employer: 0 }
+    : calcEPF(epfBase, age, !emp.isForeignWorker, emp.isForeignWorker);
+  const socso = excludeSocso
+    ? { employee: 0, employer: 0, category: (age >= 60 ? 2 : 1) as 1 | 2 }
+    : calcSOCSO(socsoBase, age);
+  const eis = excludeEis
+    ? { employee: 0, employer: 0 }
+    : calcEIS(eisBase, age, !emp.isForeignWorker);
+
   // ── YTD basis for PCB annualization ──
   // Recorded payslips + TP3 carry-in (real prior-employer figures — QA
   // employees C-1). The year-continuity estimate applies ONLY when there is
@@ -376,22 +542,51 @@ function computePayslip(emp: Employee, ctx: PayslipCtx, adjustments: PayslipAdju
       emp, monthIndex, grossPay, epf.employee, round2(socso.employee + eis.employee),
     );
   }
-  const pcb = calcPCB(grossPay, pcbBasis, {
-    marital: emp.maritalStatus,
-    children: emp.children,
-    monthIndex,
-    // Ad-hoc earning adjustments are additional remuneration (LHDN bonus
-    // mechanism): taxed via the aggregate delta, in full, this month.
-    bonus: adjustmentEarnings > 0 ? adjustmentEarnings : undefined,
-    epfEmployee: epf.employee,
-    socsoEmployee: round2(socso.employee + eis.employee),
-  });
+
+  // ── PCB base ──
+  // With NO tagged lines anywhere, reproduce the legacy call exactly
+  // (annualized on the gross; all adjustment earnings as additional
+  // remuneration) so pre-tag figures never drift. Otherwise accumulate per
+  // line: normal remuneration = basic + allowances + OT + pcb-tagged normal
+  // lines + non-cash BIK (TP2); additional remuneration (bonus/commission/
+  // director fees + legacy untagged lines) taxed via the aggregate delta.
+  const hasTaggedLines = tagged.length > 0 || earningLines.some((a) => a.nonCash && a.tags);
+  let pcbBase: number;
+  let pcbAdditional: number;
+  if (hasTaggedLines) {
+    pcbBase = round2(
+      basicPay + allowanceTotal + otPay +
+      taggedSum((a) => a.tags!.pcb && !a.additionalRemuneration) +
+      round2(earningLines.filter((a) => a.nonCash && a.tags?.pcb).reduce((s, a) => s + a.amount, 0)),
+    );
+    pcbAdditional = round2(
+      taggedSum((a) => a.tags!.pcb && a.additionalRemuneration === true) + untaggedTotal,
+    );
+  } else {
+    pcbBase = grossPay;
+    pcbAdditional = adjustmentEarnings;
+  }
+  const pcb = excludePcb
+    ? 0
+    : calcPCB(hasTaggedLines ? pcbBase : grossPay, pcbBasis, {
+        marital: emp.maritalStatus,
+        children: emp.children,
+        monthIndex,
+        // Additional remuneration (LHDN bonus mechanism): taxed via the
+        // aggregate delta, in full, this month.
+        bonus: pcbAdditional > 0 ? pcbAdditional : undefined,
+        epfEmployee: epf.employee,
+        socsoEmployee: round2(socso.employee + eis.employee),
+      });
   const hrd = hrdfLevy(round2(basicPay + allowanceTotal), ctx.numLocal);
 
   const netPay = round2(
-    grossPay - epf.employee - socso.employee - eis.employee - pcb - adjustmentDeductions + claimsTotal,
+    grossPay - epf.employee - socso.employee - eis.employee - pcb - adjustmentDeductions +
+    claimsTotal + adjustmentReimbursements,
   );
-  const employerCost = round2(grossPay + epf.employer + socso.employer + eis.employer + hrd + claimsTotal);
+  const employerCost = round2(
+    grossPay + epf.employer + socso.employer + eis.employer + hrd + claimsTotal + adjustmentReimbursements,
+  );
 
   // ── Compliance warnings ──
   if (emp.employmentType === 'full-time' && emp.baseSalary < MINIMUM_WAGE) {
@@ -407,14 +602,46 @@ function computePayslip(emp: Employee, ctx: PayslipCtx, adjustments: PayslipAdju
 
   // ── Itemized payslip lines (EA 1955 — itemized payslips mandatory) ──
   const basisLabel = PRORATION_LABELS[method];
-  const lines: PayslipLine[] = [
-    {
+  const optOutSuffix = (key: StatutoryOptOutKey): string => {
+    const reason = edit.optOutReasons?.[key]?.trim();
+    return ` — opted out${reason ? ` (${reason})` : ''}`;
+  };
+  const workedInfoLines: PayslipLine[] = [];
+  if (salaryType === 'monthly') {
+    workedInfoLines.push({
       label: `Days worked: ${basicPr.daysWorked} / ${basicPr.daysInBasis} (${basisLabel})`,
       amount: 0,
       kind: 'info',
+    });
+    if (edit.workedQty !== undefined) {
+      workedInfoLines.push({
+        label: `Worked: ${workedQty} month(s) — overridden (joiner/leaver proration bypassed)`,
+        amount: 0,
+        kind: 'info',
+      });
+    }
+  } else {
+    workedInfoLines.push({
+      label:
+        `Worked: ${workedQty} ${workedUnit === 'day' ? 'day(s)' : 'hour(s)'} × ` +
+        `RM ${rateUsed.toFixed(2)}/${workedUnit}` +
+        (edit.workedQty !== undefined && countedQty !== null && countedQty !== workedQty
+          ? ` — overridden (attendance counted ${countedQty})`
+          : ''),
+      amount: 0,
+      kind: 'info',
+    });
+  }
+  const basicLineAmount =
+    salaryType === 'monthly' && !hasBasicOverride ? round2(monthlyRate * factor) : basicPay;
+  const lines: PayslipLine[] = [
+    ...workedInfoLines,
+    {
+      label: hasBasicOverride ? 'Basic salary (overridden)' : 'Basic salary',
+      amount: basicLineAmount,
+      kind: 'earning',
     },
-    { label: 'Basic salary', amount: round2(emp.baseSalary * factor), kind: 'earning' },
-    ...(factor < 1
+    ...(salaryType === 'monthly' && factor < 1 && edit.workedQty === undefined
       ? [{
           label: `Proration — ${basicPr.daysWorked}/${basicPr.daysInBasis} ${basisLabel} × ${round2(factor * 100) / 100}`,
           amount: 0,
@@ -432,20 +659,36 @@ function computePayslip(emp: Employee, ctx: PayslipCtx, adjustments: PayslipAdju
       label: adjustmentLabel(a),
       amount: a.kind === 'earning' ? round2(a.amount) : -round2(a.amount),
       kind: a.kind,
+      ...(a.kind === 'earning' && (a.nonStatutory || a.nonCash) ? { nonStatutory: true as const } : {}),
+      ...(a.kind === 'earning' && a.nonCash ? { nonCash: true as const } : {}),
     })),
-    { label: `EPF employee (${epfEmployeeRateLabel(emp, age)})`, amount: -epf.employee, kind: 'deduction' },
-    { label: 'SOCSO employee', amount: -socso.employee, kind: 'deduction' },
-    { label: 'EIS employee', amount: -eis.employee, kind: 'deduction' },
-    { label: 'PCB / MTD', amount: -pcb, kind: 'deduction' },
+    ...(excludeEpf
+      ? [{ label: `EPF employee${optOutSuffix('epf')}`, amount: 0, kind: 'deduction' as const }]
+      : [{ label: `EPF employee (${epfEmployeeRateLabel(emp, age)})`, amount: -epf.employee, kind: 'deduction' as const }]),
+    ...(excludeSocso
+      ? [{ label: `SOCSO employee${optOutSuffix('socso')}`, amount: 0, kind: 'deduction' as const }]
+      : [{ label: 'SOCSO employee', amount: -socso.employee, kind: 'deduction' as const }]),
+    ...(excludeEis
+      ? [{ label: `EIS employee${optOutSuffix('eis')}`, amount: 0, kind: 'deduction' as const }]
+      : [{ label: 'EIS employee', amount: -eis.employee, kind: 'deduction' as const }]),
+    ...(excludePcb
+      ? [{ label: `PCB / MTD${optOutSuffix('pcb')}`, amount: 0, kind: 'deduction' as const }]
+      : [{ label: 'PCB / MTD', amount: -pcb, kind: 'deduction' as const }]),
     ...monthClaims.map((c) => ({
       label: `Claim — ${c.title}`,
       amount: round2(c.amount),
       kind: 'earning' as const,
       nonStatutory: true,
     })),
-    { label: `EPF employer (${epfEmployerRateLabel(emp, age, epfWages)})`, amount: epf.employer, kind: 'employer' },
-    { label: 'SOCSO employer', amount: socso.employer, kind: 'employer' },
-    { label: 'EIS employer', amount: eis.employer, kind: 'employer' },
+    ...(excludeEpf
+      ? [{ label: `EPF employer${optOutSuffix('epf')}`, amount: 0, kind: 'employer' as const }]
+      : [{ label: `EPF employer (${epfEmployerRateLabel(emp, age, epfBase)})`, amount: epf.employer, kind: 'employer' as const }]),
+    ...(excludeSocso
+      ? [{ label: `SOCSO employer${optOutSuffix('socso')}`, amount: 0, kind: 'employer' as const }]
+      : [{ label: 'SOCSO employer', amount: socso.employer, kind: 'employer' as const }]),
+    ...(excludeEis
+      ? [{ label: `EIS employer${optOutSuffix('eis')}`, amount: 0, kind: 'employer' as const }]
+      : [{ label: 'EIS employer', amount: eis.employer, kind: 'employer' as const }]),
     { label: 'HRD Corp levy', amount: hrd, kind: 'employer' },
   ];
 
@@ -489,6 +732,28 @@ function computePayslip(emp: Employee, ctx: PayslipCtx, adjustments: PayslipAdju
     adjustments: cleanAdjustments,
     adjustmentEarnings,
     adjustmentDeductions,
+    adjustmentReimbursements,
+    adjustmentNonCash,
+    salaryTypeUsed: salaryType,
+    rateUsed,
+    workedQty,
+    workedUnit,
+    ...(hasBasicOverride ? { basicOverride: basicPay } : {}),
+    ...(edit.salaryType ? { salaryTypeOverride: edit.salaryType } : {}),
+    ...(edit.rate !== undefined ? { rateOverride: edit.rate } : {}),
+    ...(edit.workedQty !== undefined ? { workedQtyOverride: edit.workedQty } : {}),
+    epfBase,
+    socsoBase,
+    eisBase,
+    pcbBase,
+    pcbAdditional,
+    ...(excludeEpf ? { excludeEpf: true } : {}),
+    ...(excludeSocso ? { excludeSocso: true } : {}),
+    ...(excludeEis ? { excludeEis: true } : {}),
+    ...(excludePcb ? { excludePcb: true } : {}),
+    ...(excludeEpf || excludeSocso || excludeEis || excludePcb
+      ? { optOutReasons: edit.optOutReasons ?? {} }
+      : {}),
   };
 }
 
@@ -678,6 +943,83 @@ function replacePayslip(run: PayrollRun, slip: Payslip): Payslip {
 }
 
 /**
+ * Internal: recompute one employee's payslip inside a DRAFT run from the
+ * given edit state and persist it (retallying the run). Returns null when
+ * the run is missing / finalized / doesn't cover the employee. Callers log
+ * their own audit action.
+ */
+function applyEdit(runId: string, employeeId: string, edit: PayslipEditInput): Payslip | null {
+  const run = findRun(runId);
+  if (!run || run.status !== 'draft') return null;
+  const existing = payslipFor(runId, employeeId);
+  const emp = getCollection<Employee>('employees').find((e) => e.id === employeeId);
+  if (!existing || !emp) return null;
+  const ctx = buildCtx(run.monthKey, runId, run.prorationMethod ?? resolveProrationMethod(), []);
+  const recomputed = computePayslip(emp, ctx, edit);
+  return replacePayslip(run, { ...recomputed, id: existing.id, refNo: existing.refNo });
+}
+
+/**
+ * Recompute one employee's payslip inside a draft run from a full edit state
+ * (kakitangan editor): adjustment lines, salary-type / rate / worked-quantity
+ * overrides, basic 'Full amount' override and statutory opt-outs. Returns the
+ * recomputed payslip, or null when the run is missing / already finalized /
+ * doesn't cover the employee. Overrides are audit-logged in the detail line.
+ */
+export function updateDraftPayslip(
+  runId: string,
+  employeeId: string,
+  edit: PayslipEditInput,
+  actor = 'system',
+): Payslip | null {
+  const run = findRun(runId);
+  if (!run || run.status !== 'draft') return null;
+  const emp = getCollection<Employee>('employees').find((e) => e.id === employeeId);
+  const slip = applyEdit(runId, employeeId, edit);
+  if (!slip || !emp) return null;
+  const flags: string[] = [];
+  if (edit.basicOverride !== undefined) flags.push(`basic overridden to ${slip.basicPay.toFixed(2)}`);
+  if (edit.salaryType) flags.push(`salary type ${edit.salaryType}`);
+  if (edit.workedQty !== undefined) flags.push(`worked ${edit.workedQty} ${slip.workedUnit ?? ''}(s)`);
+  const optOuts = (['epf', 'socso', 'eis', 'pcb'] as const).filter(
+    (k) => edit[k === 'epf' ? 'excludeEpf' : k === 'socso' ? 'excludeSocso' : k === 'eis' ? 'excludeEis' : 'excludePcb'],
+  );
+  if (optOuts.length > 0) flags.push(`opted out: ${optOuts.join(', ').toUpperCase()}`);
+  logAudit({
+    actorName: actor,
+    action: 'payroll.payslip.adjust',
+    entity: 'payslips',
+    entityId: slip.id,
+    detail:
+      `${run.monthKey} ${emp.name}: ${(edit.adjustments ?? []).length} adjustment(s)` +
+      (flags.length > 0 ? `, ${flags.join(', ')}` : '') +
+      `, net ${slip.netPay.toFixed(2)}`,
+  });
+  return slip;
+}
+
+/**
+ * Live preview of one employee's draft payslip for an edit state WITHOUT
+ * persisting anything — the editor's 'Pay amount' panel recomputes through
+ * this on every keystroke, so what HR sees is exactly what Save will store.
+ * Works for any run (read-only); returns null when run/employee is unknown.
+ */
+export function previewPayslip(
+  runId: string,
+  employeeId: string,
+  edit: PayslipEditInput,
+): Payslip | null {
+  const run = findRun(runId);
+  if (!run) return null;
+  const emp = getCollection<Employee>('employees').find((e) => e.id === employeeId);
+  if (!emp) return null;
+  const existing = payslipFor(runId, employeeId);
+  const ctx = buildCtx(run.monthKey, runId, run.prorationMethod ?? resolveProrationMethod(), []);
+  const slip = computePayslip(emp, ctx, edit);
+  return existing ? { ...slip, id: existing.id, refNo: existing.refNo } : slip;
+}
+
+/**
  * Recompute one employee's payslip inside a draft run, replacing their ad-hoc
  * adjustments (CP38 / Zakat / PTPTN / custom earnings & deductions). Returns
  * the recomputed payslip, or null when the run is missing / already finalized
@@ -691,12 +1033,9 @@ export function setPayslipAdjustments(
 ): Payslip | null {
   const run = findRun(runId);
   if (!run || run.status !== 'draft') return null;
-  const existing = payslipFor(runId, employeeId);
   const emp = getCollection<Employee>('employees').find((e) => e.id === employeeId);
-  if (!existing || !emp) return null;
-  const ctx = buildCtx(run.monthKey, runId, run.prorationMethod ?? resolveProrationMethod(), []);
-  const recomputed = computePayslip(emp, ctx, adjustments);
-  const slip = replacePayslip(run, { ...recomputed, id: existing.id, refNo: existing.refNo });
+  const slip = applyEdit(runId, employeeId, { adjustments });
+  if (!slip || !emp) return null;
   logAudit({
     actorName: actor,
     action: 'payroll.payslip.adjust',
@@ -709,7 +1048,8 @@ export function setPayslipAdjustments(
 
 /**
  * Recompute one employee's payslip from defaults, dropping every ad-hoc
- * adjustment ('Reset employee' in the editor). Draft runs only.
+ * adjustment AND every per-run override ('Reset employee' in the editor).
+ * Draft runs only.
  */
 export function resetPayslipToDefaults(
   runId: string,
@@ -718,12 +1058,9 @@ export function resetPayslipToDefaults(
 ): Payslip | null {
   const run = findRun(runId);
   if (!run || run.status !== 'draft') return null;
-  const existing = payslipFor(runId, employeeId);
   const emp = getCollection<Employee>('employees').find((e) => e.id === employeeId);
-  if (!existing || !emp) return null;
-  const ctx = buildCtx(run.monthKey, runId, run.prorationMethod ?? resolveProrationMethod(), []);
-  const recomputed = computePayslip(emp, ctx, []);
-  const slip = replacePayslip(run, { ...recomputed, id: existing.id, refNo: existing.refNo });
+  const slip = applyEdit(runId, employeeId, {});
+  if (!slip || !emp) return null;
   logAudit({
     actorName: actor,
     action: 'payroll.payslip.reset',

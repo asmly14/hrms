@@ -82,12 +82,15 @@ export default function PayslipPage() {
   const pos = emp ? positions.find((p) => p.id === emp.positionId) : undefined;
 
   // B4 — claim reimbursements are non-statutory: render them in their own
-  // block so the earnings table foots exactly to slip.grossPay.
+  // block so the earnings table foots exactly to slip.grossPay. Non-cash
+  // BIK/VOLA lines get their own block (taxable via TP2, never paid).
   const earnings = slip.lines.filter((l) => l.kind === 'earning' && !l.nonStatutory);
-  const reimbursements = slip.lines.filter((l) => l.kind === 'earning' && l.nonStatutory);
+  const reimbursements = slip.lines.filter((l) => l.kind === 'earning' && l.nonStatutory && !l.nonCash);
+  const bikLines = slip.lines.filter((l) => l.kind === 'earning' && l.nonCash);
   const deductions = slip.lines.filter((l) => l.kind === 'deduction');
   const employer = slip.lines.filter((l) => l.kind === 'employer');
   const infoLines = slip.lines.filter((l) => l.kind === 'info');
+  const reimbursementsTotal = round2(slip.claimsTotal + (slip.adjustmentReimbursements ?? 0));
   const totalDeductions = round2(
     slip.epfEmployee + slip.socsoEmployee + slip.eisEmployee + slip.pcb +
     slip.unpaidLeaveDeduction + (slip.adjustmentDeductions ?? 0),
@@ -232,7 +235,34 @@ export default function PayslipPage() {
               <tfoot>
                 <tr className="border-t font-medium">
                   <td className="py-1.5">Total reimbursements</td>
-                  <td className="py-1.5 text-right tabular-nums">{fmtRM(slip.claimsTotal)}</td>
+                  <td className="py-1.5 text-right tabular-nums">{fmtRM(reimbursementsTotal)}</td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        )}
+
+        {/* BIK / VOLA — non-cash taxable benefits (TP2): PCB base only */}
+        {bikLines.length > 0 && (
+          <div className="mt-6">
+            <p className="text-sm font-semibold">BIK / VOLA (non-cash, taxable)</p>
+            <p className="mt-0.5 text-xs text-muted-foreground print-text-muted">
+              Benefits-in-kind / value of living accommodation — feeds the PCB base via TP2;
+              not paid in cash and excluded from gross and net pay.
+            </p>
+            <table className="mt-2 w-full text-sm md:w-1/2">
+              <tbody>
+                {bikLines.map((l) => (
+                  <tr key={l.label} className="border-b border-dashed last:border-0">
+                    <td className="py-1.5 pr-2">{l.label}</td>
+                    <td className="py-1.5 text-right tabular-nums">{fmtRM(l.amount)}</td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr className="border-t font-medium">
+                  <td className="py-1.5">Total BIK / VOLA</td>
+                  <td className="py-1.5 text-right tabular-nums">{fmtRM(slip.adjustmentNonCash ?? 0)}</td>
                 </tr>
               </tfoot>
             </table>
@@ -246,7 +276,7 @@ export default function PayslipPage() {
               Net pay
             </p>
             <p className="text-xs text-muted-foreground print-text-muted">
-              incl. {fmtRM(slip.claimsTotal)} claim reimbursements
+              incl. {fmtRM(reimbursementsTotal)} claim &amp; expense reimbursements
             </p>
           </div>
           <p className="text-2xl font-bold tabular-nums">{fmtRM(slip.netPay)}</p>

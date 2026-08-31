@@ -13,6 +13,30 @@
  */
 
 import { round2 } from './utils';
+import type { WageBaseTags } from './types';
+
+export type { WageBaseTags };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Statutory wage-base tags (docs/research/statutory-rates.md §6)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Every scheme base applies (ordinary fixed wages: basic, fixed allowances). */
+export const TAGS_ALL: WageBaseTags = { epf: true, socso: true, eis: true, pcb: true };
+/** No scheme base applies (genuine expense reimbursements). */
+export const TAGS_NONE: WageBaseTags = { epf: false, socso: false, eis: false, pcb: false };
+
+/**
+ * Legacy behaviour for UNTAGGED ad-hoc earning lines (pre-tag payslips):
+ * SOCSO/EIS bases ✓ (they join the gross), EPF base ✗, PCB via the
+ * additional-remuneration mechanism. New tagged lines override this per line.
+ */
+export const LEGACY_EARNING_TAGS: WageBaseTags = { epf: false, socso: true, eis: true, pcb: true };
+
+/** Effective tags for a pay line — its own tags when present, else the legacy default. */
+export function effectiveTags(tags: WageBaseTags | undefined): WageBaseTags {
+  return tags ?? LEGACY_EARNING_TAGS;
+}
 
 // Source: Minimum Wages Order 2024 — RM1,700/month from 1 Feb 2025 (≥5 employees) / 1 Aug 2025 (all).
 export const MINIMUM_WAGE = 1700;

@@ -267,6 +267,16 @@ export default function RunDetail() {
                             {showSensitive ? empMap.get(p.employeeId)?.ic : '—'}
                           </span>
                           <span className="block text-xs text-muted-foreground">{p.refNo ?? p.id}</span>
+                          {p.salaryTypeUsed && p.salaryTypeUsed !== 'monthly' && (
+                            <Badge variant="secondary" className="mt-0.5 text-[10px]">
+                              {p.salaryTypeUsed}-rated
+                            </Badge>
+                          )}
+                          {p.basicOverride !== undefined && (
+                            <Badge variant="outline" className="ml-1 mt-0.5 border-amber-400 text-[10px] text-amber-700 dark:text-amber-500">
+                              basic overridden
+                            </Badge>
+                          )}
                         </TableCell>
                         <TableCell className="text-right"><Money>{fmtRM(p.basicPay)}</Money></TableCell>
                         <TableCell className="text-right"><Money>{fmtRM(p.allowances)}</Money></TableCell>
@@ -300,6 +310,11 @@ export default function RunDetail() {
                             {(p.adjustmentDeductions ?? 0) + (p.adjustmentEarnings ?? 0) > 0 && (
                               <Badge variant="outline" className="mr-1 border-amber-400 text-amber-700 dark:text-amber-500">
                                 adjusted
+                              </Badge>
+                            )}
+                            {(p.excludeEpf || p.excludeSocso || p.excludeEis || p.excludePcb) && (
+                              <Badge variant="outline" className="mr-1 border-red-400 text-red-700 dark:text-red-400">
+                                opt-out
                               </Badge>
                             )}
                             {isDraft && (
