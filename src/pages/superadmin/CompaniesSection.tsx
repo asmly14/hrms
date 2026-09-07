@@ -4,18 +4,23 @@
  * (upsertCompany), Suspend / Reactivate (status flag with confirm), and the
  * entry point to the create-company wizard.
  */
-import { useMemo, useState } from 'react';
+import { Fragment, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  AlertTriangle, Ban, Building2, LogIn, Pencil, Plus, RotateCcw, Search, Trash2,
+  AlertTriangle, Ban, Building2, ChevronDown, ChevronRight, Download, LogIn, Pencil,
+  Plus, RotateCcw, Search, Trash2,
 } from 'lucide-react';
 import { useAuth } from '@/lib/useAuth';
 import { toast } from 'sonner';
 import { useTenant } from '@/lib/useTenant';
 import { logAudit, removeCompany, trialStatusOf, upsertCompany } from '@/lib/db';
 import { states } from '@/lib/holidays';
-import { fmtDate } from '@/lib/utils';
+import { fmtDate, fmtRM } from '@/lib/utils';
 import type { Company, CompanyPlan, CompanyStatus, StateCode } from '@/lib/types';
+import {
+  PLAN_CATALOG, invoiceStatusOf, invoicesFor, subscriptionFor, updateSubscription,
+  useBillingVersion, type BillingCycle,
+} from '@/lib/billing';
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
@@ -30,11 +35,14 @@ import { Label } from '@/components/ui/label';
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
+import { Switch } from '@/components/ui/switch';
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table';
 import { headcountOf } from './lib';
 import { AccentDot, EmptyState, PlanBadge, SectionCard, StatusBadge } from './shared';
+import { InvoiceStatusBadge } from './BillingSection';
+import { downloadInvoicePdf } from './invoicePdf';
 import CreateCompanyWizard from './CreateCompanyWizard';
 
 // ── Edit dialog ──────────────────────────────────────────────────────────────
@@ -62,6 +70,13 @@ function EditCompanyDialog(props: {
   const [deleteArmed, setDeleteArmed] = useState(false);
   const [deleteConfirmText, setDeleteConfirmText] = useState('');
 
+  // ── Subscription section (billing.ts; auto-created/synced from the company) ─
+  const sub = subscriptionFor(company.id);
+  const [cycle, setCycle] = useState<BillingCycle>(sub?.billingCycle ?? 'monthly');
+  const [seatsOverride, setSeatsOverride] = useState(sub?.seatsOverridden ?? false);
+  const [seatsInput, setSeatsInput] = useState(String(sub?.seats ?? 0));
+  const [discountInput, setDiscountInput] = useState(String(sub?.discountPercent ?? 0));
+
   const save = () => {
     if (name.trim().length < 2) {
       setError('Company name is required (min 2 characters).');
@@ -73,6 +88,14 @@ function EditCompanyDialog(props: {
     }
     if (status === 'trial' && trialEnds && Number.isNaN(new Date(`${trialEnds}T00:00:00`).getTime())) {
       setError('Trial end date is not a valid date.');
+      return;
+    }
+    if (seatsOverride && !/^\d{1,6}$/.test(seatsInput.trim())) {
+      setError('Seat override must be a whole number (0 or more).');
+      return;
+    }
+    if (discountInput.trim() !== '' && !/^\d{1,3}(\.\d{1,2})?$/.test(discountInput.trim())) {
+      setError('Discount must be a percentage like 10 or 12.5.');
       return;
     }
     // Trial clock is only meaningful for trial tenants; clearing the input
@@ -106,6 +129,14 @@ function EditCompanyDialog(props: {
     if (next.branding.logoText !== company.branding.logoText) changes.push('logoText');
     if (next.branding.accentColor !== company.branding.accentColor) changes.push('accentColor');
     upsertCompany(next);
+    // Subscription sync: upsertCompany already landed, so updateSubscription
+    // re-reads the (possibly new) plan and applies the contract knobs.
+    updateSubscription(next.id, {
+      billingCycle: cycle,
+      seatsOverridden: seatsOverride,
+      seats: seatsOverride ? Math.max(0, parseInt(seatsInput.trim(), 10) || 0) : undefined,
+      discountPercent: discountInput.trim() === '' ? 0 : Number(discountInput.trim()),
+    });
     logAudit(
       {
         actorName: actor,
@@ -124,12 +155,12 @@ function EditCompanyDialog(props: {
 
   return (
     <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent className="sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>Edit company — {company.code}</DialogTitle>
           <DialogDescription>
-            Profile, plan and branding for {company.name}. Module config (working week,
-            payroll cutoff, numbering) is managed inside the tenant's own Settings.
+            Profile, plan, subscription and branding for {company.name}. Module config (working
+            week, payroll cutoff, numbering) is managed inside the tenant's own Settings.
           </DialogDescription>
         </DialogHeader>
 
@@ -227,6 +258,75 @@ function EditCompanyDialog(props: {
           </div>
         </div>
 
+        {/* Subscription — plan changes above flow into the subscription via
+            subscriptionFor(); the knobs below are the contract overrides. */}
+        <div className="space-y-3 rounded-lg border border-amber-200 bg-amber-50/50 p-4 dark:border-amber-900 dark:bg-amber-950/20">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-sm font-medium">Subscription</p>
+            {sub ? (
+              <p className="text-xs text-muted-foreground">
+                {PLAN_CATALOG[sub.plan].label} · {sub.status} · paid through{' '}
+                {fmtDate(sub.currentPeriodEnd)}
+              </p>
+            ) : null}
+          </div>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label>Billing cycle</Label>
+              <Select value={cycle} onValueChange={(v) => setCycle(v as BillingCycle)}>
+                <SelectTrigger className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="monthly">Monthly</SelectItem>
+                  <SelectItem value="annual">Annual — 12 months for the price of 10</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="sa-edit-discount">Discount %</Label>
+              <Input
+                id="sa-edit-discount"
+                inputMode="decimal"
+                placeholder="0"
+                value={discountInput}
+                onChange={(e) => setDiscountInput(e.target.value)}
+              />
+            </div>
+            <div className="space-y-1.5 sm:col-span-2">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <Label htmlFor="sa-edit-seatoverride">Seat override</Label>
+                  <p className="text-xs text-muted-foreground">
+                    Off: seats follow live headcount ({headcountOf(company.id)} now). On: bill a
+                    fixed contracted seat count.
+                  </p>
+                </div>
+                <Switch
+                  id="sa-edit-seatoverride"
+                  checked={seatsOverride}
+                  onCheckedChange={setSeatsOverride}
+                />
+              </div>
+              {seatsOverride ? (
+                <Input
+                  aria-label="Contracted seats"
+                  inputMode="numeric"
+                  value={seatsInput}
+                  onChange={(e) => setSeatsInput(e.target.value)}
+                />
+              ) : null}
+            </div>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Rate: {fmtRM(PLAN_CATALOG[plan].monthlyRate)}/seat/mo list
+            {cycle === 'annual'
+              ? ` · annual invoices bill ${fmtRM(PLAN_CATALOG[plan].monthlyRate * 10)}/seat/yr`
+              : ''}
+            . Changing the plan above re-prices the subscription on save.
+          </p>
+        </div>
+
         {error ? <p className="text-sm text-red-600 dark:text-red-400">{error}</p> : null}
 
         {/* Danger zone — PDPA erasure (tenant deletion). Type-the-name confirm
@@ -297,6 +397,79 @@ function EditCompanyDialog(props: {
   );
 }
 
+// ── Per-company billing history (row expansion) ──────────────────────────────
+
+function CompanyBillingHistory({ company }: { company: Company }) {
+  const sub = subscriptionFor(company.id);
+  const history = invoicesFor(company.id);
+  return (
+    <div className="space-y-3 px-2 py-1">
+      {sub ? (
+        <p className="text-xs text-muted-foreground">
+          Subscription: <span className="font-medium text-foreground">{PLAN_CATALOG[sub.plan].label}</span>
+          {' · '}{sub.billingCycle}
+          {' · '}{sub.seats} seat{sub.seats === 1 ? '' : 's'}
+          {sub.seatsOverridden ? ' (contracted)' : ' (auto headcount)'}
+          {sub.discountPercent ? ` · ${sub.discountPercent}% discount` : ''}
+          {' · status '}<span className="font-medium text-foreground">{sub.status}</span>
+          {' · paid through '}{fmtDate(sub.currentPeriodEnd)}
+        </p>
+      ) : null}
+      {history.length === 0 ? (
+        <p className="text-sm text-muted-foreground">
+          No invoices yet — run monthly invoicing from the Billing tab to draft the first one.
+        </p>
+      ) : (
+        <div className="overflow-x-auto rounded-lg border">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Invoice</TableHead>
+                <TableHead>Period</TableHead>
+                <TableHead className="text-right">Total</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead>Due</TableHead>
+                <TableHead className="hidden lg:table-cell">Paid</TableHead>
+                <TableHead className="text-right">PDF</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {history.map((inv) => (
+                <TableRow key={inv.id}>
+                  <TableCell className="font-medium">{inv.invoiceNo}</TableCell>
+                  <TableCell>{inv.period}</TableCell>
+                  <TableCell className="text-right tabular-nums">{fmtRM(inv.total)}</TableCell>
+                  <TableCell>
+                    <InvoiceStatusBadge status={invoiceStatusOf(inv)} />
+                  </TableCell>
+                  <TableCell>{fmtDate(inv.dueAt)}</TableCell>
+                  <TableCell className="hidden lg:table-cell">
+                    {inv.paidAt ? `${fmtDate(inv.paidAt)} · ${inv.paymentMethod ?? ''}` : '—'}
+                  </TableCell>
+                  <TableCell className="text-right">
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      title={`Download ${inv.invoiceNo}.pdf`}
+                      onClick={() =>
+                        void downloadInvoicePdf(inv)
+                          .then((file) => toast.success(`Downloaded ${file}`))
+                          .catch(() => toast.error('PDF generation failed'))
+                      }
+                    >
+                      <Download className="h-4 w-4" />
+                    </Button>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Directory ────────────────────────────────────────────────────────────────
 
 export default function CompaniesSection() {
@@ -310,6 +483,9 @@ export default function CompaniesSection() {
   const [editTarget, setEditTarget] = useState<Company | null>(null);
   const [confirm, setConfirm] = useState<{ company: Company; action: 'suspend' | 'reactivate' } | null>(null);
   const [wizardOpen, setWizardOpen] = useState(false);
+  // Row expansion: per-company billing history under the directory row.
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const billingVersion = useBillingVersion();
 
   const actor = user?.username ? `${user.username} (SuperAdmin)` : 'SuperAdmin';
 
@@ -468,7 +644,8 @@ export default function CompaniesSection() {
               </TableHeader>
               <TableBody>
                 {filtered.map((c) => (
-                  <TableRow key={c.id}>
+                  <Fragment key={c.id}>
+                  <TableRow>
                     <TableCell>
                       <div className="flex items-center gap-2">
                         <AccentDot color={c.branding.accentColor} />
@@ -518,6 +695,18 @@ export default function CompaniesSection() {
                         <Button
                           variant="ghost"
                           size="icon"
+                          title={expandedId === c.id ? 'Hide billing history' : 'Show billing history'}
+                          onClick={() => setExpandedId(expandedId === c.id ? null : c.id)}
+                        >
+                          {expandedId === c.id ? (
+                            <ChevronDown className="h-4 w-4" />
+                          ) : (
+                            <ChevronRight className="h-4 w-4" />
+                          )}
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
                           title={`Enter ${c.name}`}
                           onClick={() => enterCompany(c)}
                         >
@@ -555,6 +744,16 @@ export default function CompaniesSection() {
                       </div>
                     </TableCell>
                   </TableRow>
+                  {expandedId === c.id ? (
+                    <TableRow className="bg-muted/30 hover:bg-muted/30">
+                      <TableCell colSpan={8}>
+                        {/* key on billingVersion: re-read the global stores after
+                            any billing write (payment recorded in Billing tab, …). */}
+                        <CompanyBillingHistory key={billingVersion} company={c} />
+                      </TableCell>
+                    </TableRow>
+                  ) : null}
+                  </Fragment>
                 ))}
               </TableBody>
             </Table>

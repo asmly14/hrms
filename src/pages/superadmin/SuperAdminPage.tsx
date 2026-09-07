@@ -2,9 +2,10 @@
  * /superadmin — the SYSTEM SuperAdmin console.
  *
  * Renders only for the cross-company SuperAdmin session (useAuth().isSuperAdmin);
- * any other role sees a styled restricted notice. Five areas, organised as tabs:
+ * any other role sees a styled restricted notice. Six areas, organised as tabs:
  *   Overview   — tenant stats, estimated MRR, headcount & plan charts
  *   Companies  — directory with Enter / Edit / Suspend / Reactivate + create wizard
+ *   Billing    — SaaS owner cockpit: subscriptions, invoices, revenue analytics
  *   Activity   — merged cross-tenant audit trail (latest 50)
  *   System     — demo-data reseed, global holidays note, plan matrix
  */
@@ -19,6 +20,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import OverviewSection from './OverviewSection';
 import CompaniesSection from './CompaniesSection';
+import BillingSection from './BillingSection';
 import ActivitySection from './ActivitySection';
 import SystemSection from './SystemSection';
 
@@ -68,9 +70,10 @@ export default function SuperAdminPage() {
       </div>
 
       <Tabs defaultValue="overview">
-        <TabsList className="grid w-full grid-cols-4 sm:inline-flex sm:w-auto">
+        <TabsList className="grid w-full grid-cols-5 sm:inline-flex sm:w-auto">
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="companies">Companies</TabsTrigger>
+          <TabsTrigger value="billing">Billing</TabsTrigger>
           <TabsTrigger value="activity">Activity</TabsTrigger>
           <TabsTrigger value="system">System</TabsTrigger>
         </TabsList>
@@ -80,6 +83,9 @@ export default function SuperAdminPage() {
         </TabsContent>
         <TabsContent value="companies" className="mt-6">
           <CompaniesSection />
+        </TabsContent>
+        <TabsContent value="billing" className="mt-6">
+          <BillingSection />
         </TabsContent>
         <TabsContent value="activity" className="mt-6">
           <ActivitySection />

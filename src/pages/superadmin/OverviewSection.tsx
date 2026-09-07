@@ -22,6 +22,7 @@ import {
   ChartTooltipContent, type ChartConfig,
 } from '@/components/ui/chart';
 import type { CompanyPlan } from '@/lib/types';
+import { getSubscriptions, mrr as billingMrr, useBillingVersion } from '@/lib/billing';
 import { headcountOf, mrrOf, PLAN_LABELS, PLAN_RATES } from './lib';
 import { EmptyState, StatCard } from './shared';
 
@@ -58,6 +59,7 @@ const planConfig = {
 
 export default function OverviewSection() {
   const { companies } = useTenant();
+  const billingVersion = useBillingVersion();
 
   // Cross-tenant snapshot: re-read whenever the global directory changes
   // (create / edit / suspend / reseed all notify via TenantProvider).
@@ -78,6 +80,17 @@ export default function OverviewSection() {
       mrr: rows.reduce((sum, r) => sum + r.mrr, 0),
     };
   }, [companies]);
+
+  // Real MRR from the billing store once subscriptions exist; otherwise the
+  // seat×rate estimate — the card labels which figure it shows.
+  const billing = useMemo(() => {
+    const hasSubscriptions = getSubscriptions().length > 0;
+    return {
+      hasSubscriptions,
+      value: hasSubscriptions ? billingMrr() : stats.mrr,
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [billingVersion, stats]);
 
   const headcountData = useMemo(
     () =>
@@ -144,9 +157,13 @@ export default function OverviewSection() {
         />
         <StatCard
           icon={CircleDollarSign}
-          label="Est. MRR"
-          value={`${fmtRM(stats.mrr)}`}
-          sub={`Free RM0 · Pro RM${PLAN_RATES.pro} · Ent. RM${PLAN_RATES.enterprise} /emp/mo`}
+          label={billing.hasSubscriptions ? 'MRR' : 'Est. MRR'}
+          value={`${fmtRM(billing.value)}`}
+          sub={
+            billing.hasSubscriptions
+              ? 'live from billing subscriptions (Billing tab)'
+              : `estimate — no subscriptions yet · Free RM0 · Pro RM${PLAN_RATES.pro} · Ent. RM${PLAN_RATES.enterprise} /emp/mo`
+          }
           tone="bg-stone-200 text-stone-700 dark:bg-stone-800 dark:text-stone-300"
         />
       </div>
@@ -211,8 +228,9 @@ export default function OverviewSection() {
       </div>
 
       <p className="text-xs text-muted-foreground">
-        MRR is an estimate: billable seats (non-resigned employees) × plan rate, active
-        companies only. Trial and suspended tenants contribute RM 0.00.
+        {billing.hasSubscriptions
+          ? 'MRR is live from the billing store (Billing tab): active + past-due subscriptions, monthly-equivalent (annual contracts ÷ 12).'
+          : 'MRR is an estimate: billable seats (non-resigned employees) × plan rate, active companies only. Trial and suspended tenants contribute RM 0.00. The figure switches to live subscription data once subscriptions exist (Billing tab).'}
       </p>
     </div>
   );

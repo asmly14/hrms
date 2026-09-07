@@ -4,10 +4,11 @@
  * upsertCompany); nav/route gating reads `isModuleEnabled()` from
  * pages/company/modules.ts (integration agent wires that into the shell).
  */
-import { AppWindow } from 'lucide-react';
+import { AlertTriangle, AppWindow } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Switch } from '@/components/ui/switch';
+import { modulesOutsidePlan, PLAN_CATALOG } from '@/lib/billing';
 import { cn } from '@/lib/utils';
 import type { ModuleKey } from '@/lib/types';
 import { SectionCard } from '../../settings/shared';
@@ -35,6 +36,11 @@ export default function ModulesSection() {
     Array.isArray(company.config.enabledModules) ? company.config.enabledModules : [],
   );
 
+  // SOFT plan enforcement (documented demo behaviour): modules enabled beyond
+  // the plan's entitlements get an amber upgrade nudge — never a hard block.
+  const outside = modulesOutsidePlan(company);
+  const labelOf = new Map(MODULE_DEFS.map((m) => [m.key, m.label]));
+
   const toggle = (key: ModuleKey, on: boolean) => {
     save(
       (c) => {
@@ -58,6 +64,23 @@ export default function ModulesSection() {
         title="Modules & features"
         description={`${enabled.size} of ${MODULE_DEFS.length} modules enabled for ${company.name}. Disabled modules are hidden from navigation and their routes are gated (via isModuleEnabled). Data is never deleted — re-enabling restores full access.`}
       >
+        {outside.length > 0 ? (
+          <div className="flex items-start gap-3 rounded-lg border border-amber-200 bg-amber-50/70 p-3 dark:border-amber-900 dark:bg-amber-950/30">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+            <div className="space-y-1 text-sm">
+              {outside.map((key) => (
+                <p key={key}>
+                  <span className="font-medium">{labelOf.get(key) ?? key}</span> is outside your{' '}
+                  {PLAN_CATALOG[company.plan].label} plan — contact us to upgrade.
+                </p>
+              ))}
+              <p className="text-xs text-muted-foreground">
+                Nothing is blocked: these modules keep working in this demo, but they are billed
+                at the next plan tier.
+              </p>
+            </div>
+          </div>
+        ) : null}
         <div className="grid gap-3 md:grid-cols-2">
           {MODULE_DEFS.map((m) => {
             const on = enabled.has(m.key);
@@ -88,8 +111,9 @@ export default function ModulesSection() {
           })}
         </div>
         <p className="text-xs text-muted-foreground">
-          Plan badges are bundle hints only — toggles are not plan-enforced in this demo. Changes take effect on the
-          next navigation; in-flight pages keep working until reload.
+          Plan badges and the amber banner above are advisory (soft enforcement) — toggles are never
+          hard-blocked in this demo. Changes take effect on the next navigation; in-flight pages keep
+          working until reload.
         </p>
       </SectionCard>
     </div>

@@ -42,6 +42,7 @@ const KpiPage = lazy(() => import('@/pages/kpi'));
 const ReviewCycle = lazy(() => import('@/pages/kpi/ReviewCycle'));
 const SalaryInsightsPage = lazy(() => import('@/pages/insights/SalaryInsightsPage'));
 const ReportsPage = lazy(() => import('@/pages/reports/ReportsPage'));
+const SalaryReportPage = lazy(() => import('@/pages/reports/SalaryReportPage'));
 const SettingsPage = lazy(() => import('@/pages/settings/SettingsPage'));
 const OnboardingPage = lazy(() => import('@/pages/onboarding/OnboardingPage'));
 const OffboardingPage = lazy(() => import('@/pages/offboarding/OffboardingPage'));
@@ -131,6 +132,8 @@ const routeRegistry: RouteDef[] = [
   { path: '/kpi/reviews/:id', title: 'Review Cycle', element: <ReviewCycle />, module: 'kpi' },
   { path: '/insights/salary', title: 'Salary Insights', element: <SalaryInsightsPage />, roles: ['Admin', 'HR'], module: 'insights' },
   { path: '/reports', title: 'Reports', element: <ReportsPage />, roles: ['Admin', 'HR', 'Manager'], module: 'reports' },
+  // Multi-period salary analysis — Admin/HR only (payroll-grade figures).
+  { path: '/reports/salary', title: 'Salary Report', element: <SalaryReportPage />, roles: ['Admin', 'HR'], module: 'reports' },
   { path: '/onboarding', title: 'Onboarding', element: <OnboardingPage />, roles: ['Admin', 'HR'], module: 'onboarding' },
   { path: '/offboarding', title: 'Offboarding', element: <OffboardingPage />, roles: ['Admin', 'HR'], module: 'offboarding' },
   { path: '/company', title: 'Company Setup', element: <CompanyPage />, roles: ['Admin', 'HR'] },

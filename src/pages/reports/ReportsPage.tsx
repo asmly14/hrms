@@ -14,8 +14,10 @@
  * back to the pre-auth demo behavior (unrestricted Admin view).
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import {
   CalendarCheck,
+  CalendarRange,
   Download,
   FileSpreadsheet,
   PieChart,
@@ -368,6 +370,28 @@ export default function ReportsPage() {
             </CardContent>
           </Card>
         ))}
+        {/* Cross-period salary analysis — dedicated page (Admin/HR only). */}
+        {isStaffRole && (
+          <Card className="rounded-xl border-amber-500/40 transition-shadow hover:shadow-md">
+            <CardHeader className="pb-3">
+              <div className="flex items-center gap-3">
+                <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-amber-100 text-amber-700">
+                  <CalendarRange className="h-4 w-4" />
+                </span>
+                <CardTitle className="text-base">Salary report</CardTitle>
+              </div>
+              <CardDescription>
+                Multi-month salary analysis — trends, per-employee totals, departments &amp;
+                distribution (finalized runs). PDF + CSV exports.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <Button asChild size="sm" variant="outline">
+                <Link to="/reports/salary">Open salary report</Link>
+              </Button>
+            </CardContent>
+          </Card>
+        )}
       </div>
 
       {/* Preview */}
