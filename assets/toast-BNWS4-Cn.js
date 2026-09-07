@@ -1,0 +1,2 @@
+import{A as s}from"./index-BJaNhj3G.js";const n=140;function i(r){if(r==null)return;let e;if(typeof r=="string"?e=r:r instanceof Error?e=r.message:e=String(r),e=(e.split(`
+`)[0]??"").trim(),e=e.replace(/^(error|typeerror|referenceerror|syntaxerror|rangeerror|urierror|evalerror):\s*/i,""),!(!e||e==="[object Object]"||e==="undefined"||e==="null"))return e.length>n?`${e.slice(0,n-1)}…`:e}function a(r,e){s.success(r,e?{description:e}:void 0)}function c(r,e){const t=i(e);s.error(r,t?{description:t}:void 0)}export{c as a,a as t};
