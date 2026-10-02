@@ -18,6 +18,10 @@ export type ClaimRecord = Claim & {
   decisionRemarks?: string;
   mileageKm?: number;
   mileageRate?: number;
+  /** Receipt bytes live in the docStore ('docBytes' collection) — this is the reference. */
+  receiptDocId?: string;
+  /** Set when the draft was prefilled by AI receipt extraction (badge while in draft). */
+  aiExtracted?: boolean;
 };
 
 /** UI-level category — 'mileage' is a guided flavour of the 'travel' category. */

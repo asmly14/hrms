@@ -89,6 +89,11 @@ export const COLLECTIONS = [
   // members so export / import / migration / seed init cover them.
   'loans', //                lib/loans.ts
   'benefits', //             lib/benefits.ts
+  // BIK category registry (BIK wave) — employer-managed benefit categories,
+  // per tenant, seeded with the statutory-default catalog on first access
+  // (lib/benefits.ts). First-class member so export / import / legacy
+  // migration / per-tenant seed init cover it like `benefits` above.
+  'benefitCategories', //    lib/benefits.ts
   // Attendance rotation plans. Physically a SUB-KEY
   // (`myhrms:t:<companyId>:attendance:rotations`); the registry key builder
   // composes exactly that, so export / import / legacy migration / per-tenant

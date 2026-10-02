@@ -23,6 +23,8 @@ import {
 import { getCollection, useCollection } from '@/lib/db';
 import { useAuth } from '@/lib/useAuth';
 import { useTenant } from '@/lib/useTenant';
+import { CONTRACTS_COLLECTION, type EmploymentContract } from '@/lib/contracts';
+import { resolveStatutoryEligibility } from '@/lib/statutoryEligibility';
 import { stateInfo } from '@/lib/holidays';
 import { MINIMUM_WAGE } from '@/lib/statutory';
 import { suggestSalary } from '@/lib/salaryBenchmark';
@@ -107,6 +109,7 @@ export default function EmployeeDetailPage() {
   const { items: positions } = useCollection<Position>('positions');
   const { items: leaveBalances } = useCollection<LeaveBalance>('leaveBalances');
   const { items: payslips } = useCollection<Payslip>('payslips');
+  const { items: contracts } = useCollection<EmploymentContract>(CONTRACTS_COLLECTION);
   const { activeCompany } = useTenant();
 
   const [editOpen, setEditOpen] = useState(false);
@@ -183,6 +186,9 @@ export default function EmployeeDetailPage() {
   const allowances = emp.fixedAllowances ?? [];
   const allowanceTotal = allowances.reduce((s, a) => s + a.amount, 0);
   const carryIn = carryInOf(emp);
+  // Statutory applicability standing rule (AUTO from employment type + linked
+  // contracts, or the employer override) — same resolution payroll applies.
+  const statutoryElig = resolveStatutoryEligibility(emp, contracts);
   // Company-defined custom fields (built in /company → Custom Fields).
   const customFields = getEmployeeCustomFields(activeCompany);
   const customValues = customOf(emp);
@@ -414,6 +420,40 @@ export default function EmployeeDetailPage() {
             <Row label="SOCSO / PERKESO no.">{emp.socsoNo || '—'}</Row>
             <Row label="Income tax no.">{emp.taxNo || '—'}</Row>
             <Row label="Foreign worker">{emp.isForeignWorker ? 'Yes' : 'No'}</Row>
+          </InfoCard>
+          <InfoCard title="Statutory applicability (payroll standing rule)" icon={Scale}>
+            {(
+              [
+                ['EPF (KWSP)', statutoryElig.epf, statutoryElig.epfReason],
+                ['SOCSO (PERKESO)', statutoryElig.socso, statutoryElig.socsoReason],
+                ['EIS (SIP)', statutoryElig.eis, statutoryElig.eisReason],
+              ] as const
+            ).map(([label, applicable, reason]) => (
+              <Row key={label} label={label}>
+                <span className="inline-flex flex-wrap items-center justify-end gap-1.5">
+                  <Badge
+                    variant={applicable ? 'secondary' : 'outline'}
+                    className={
+                      applicable
+                        ? 'bg-lime-100 text-lime-800 hover:bg-lime-100 dark:bg-lime-950/40 dark:text-lime-400'
+                        : 'border-amber-400 text-amber-700 dark:text-amber-500'
+                    }
+                  >
+                    {applicable ? 'Applicable' : 'Not applicable'}
+                  </Badge>
+                  <Badge variant="outline" className="text-muted-foreground">
+                    {statutoryElig.source === 'override' ? 'Override' : 'Auto'}
+                  </Badge>
+                </span>
+                {reason && (
+                  <p className="mt-1 text-xs font-normal text-muted-foreground">{reason}</p>
+                )}
+              </Row>
+            ))}
+            <p className="pt-2 text-xs text-muted-foreground">
+              Auto basis: {statutoryElig.autoBasis}. EIS follows SOCSO. Overrides are set in
+              Edit employee → Statutory; per-run opt-outs live in the payroll draft editor.
+            </p>
           </InfoCard>
           {emp.isForeignWorker && (
             <Card className="rounded-xl border-orange-200 bg-orange-50/60">

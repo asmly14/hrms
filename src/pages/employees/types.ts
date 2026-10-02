@@ -45,6 +45,9 @@ export interface AllowanceForm {
   amount: string;
 }
 
+/** Tri-state form value for a statutory applicability standing rule. */
+export type ApplicabilityChoice = 'auto' | 'yes' | 'no';
+
 export interface EmployeeFormState {
   name: string;
   ic: string;
@@ -70,6 +73,11 @@ export interface EmployeeFormState {
   gender: Employee['gender'];
   fixedAllowances: AllowanceForm[];
   resignDate: string;
+  /** EPF applicability: 'auto' (resolved by lib/statutoryEligibility.ts) or an
+   *  explicit employer override ('yes' / 'no'). Mapped to boolean|null on save. */
+  epfApplicable: ApplicabilityChoice;
+  /** SOCSO applicability (EIS follows SOCSO); same mapping as epfApplicable. */
+  socsoApplicable: ApplicabilityChoice;
 }
 
 export interface CarryInFormState {

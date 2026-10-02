@@ -233,6 +233,14 @@ export interface Employee {
   dailyRate?: number;
   /** RM per hour for salaryType 'hourly'; fallback baseSalary ÷ 26 ÷ 8. */
   hourlyRate?: number;
+  // ── Statutory applicability (additive; null/undefined = AUTO) ──
+  /** EPF (KWSP) applicability standing rule. null/undefined = AUTO — resolved
+   *  from employment type + linked contracts (lib/statutoryEligibility.ts).
+   *  true/false = employer override (wins over the automatic rule). */
+  epfApplicable?: boolean | null;
+  /** SOCSO (PERKESO) applicability standing rule; EIS follows SOCSO
+   *  applicability. null/undefined = AUTO (see lib/statutoryEligibility.ts). */
+  socsoApplicable?: boolean | null;
 }
 
 export type AttendanceStatus =
@@ -545,6 +553,21 @@ export interface Payslip {
   excludePcb?: boolean;
   /** Stored reason per opted-out scheme. */
   optOutReasons?: Partial<Record<StatutoryOptOutKey, string>>;
+  // ── Statutory applicability standing rule (additive; absent on legacy
+  //  payslips = all schemes applicable, auto-resolved) ──
+  /** Resolved EPF applicability for this payslip (false = both shares zeroed
+   *  as not applicable — distinct from a per-run opt-out). */
+  epfApplicable?: boolean;
+  /** Resolved SOCSO applicability for this payslip. */
+  socsoApplicable?: boolean;
+  /** Resolved EIS applicability (follows SOCSO applicability). */
+  eisApplicable?: boolean;
+  /** How applicability was decided: 'auto' (employment type / linked contract)
+   *  or 'override' (employer set a standing rule on the employee record). */
+  statutoryApplicabilitySource?: 'override' | 'auto';
+  /** Human-readable reason(s) for the resolution (printed as payslip info
+   *  lines and shown in the adjust dialog / statutory outputs). */
+  statutoryApplicabilityReasons?: string[];
   /** ISO datetime when this payslip was marked as distributed to the employee
    *  (batch distribution on the BatchPayslips page); absent = not yet handed out. */
   distributedAt?: string;

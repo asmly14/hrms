@@ -7,7 +7,8 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
-  Check, CircleDollarSign, Clock3, Paperclip, Pencil, Plus, RotateCcw, Send, Trash2, Wallet, X,
+  Check, CircleDollarSign, Clock3, Paperclip, Pencil, Plus, RotateCcw, Send, Sparkles,
+  Trash2, Wallet, X,
 } from 'lucide-react';
 import type { Employee } from '@/lib/types';
 import { logAudit, useCollection } from '@/lib/db';
@@ -77,6 +78,19 @@ function StatusBadge({ status }: { status: ClaimRecord['status'] }) {
   return (
     <Badge variant="outline" className={cn('font-medium', meta.badgeClass)}>
       {meta.label}
+    </Badge>
+  );
+}
+
+/** Small marker on drafts whose fields were prefilled by AI receipt scanning. */
+function AiBadge() {
+  return (
+    <Badge
+      variant="outline"
+      className="gap-1 border-amber-300 bg-amber-50 font-medium text-amber-700 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-300"
+      title="Fields were prefilled by AI receipt extraction — verify before submitting"
+    >
+      <Sparkles className="h-3 w-3" /> AI-extracted
     </Badge>
   );
 }
@@ -309,7 +323,10 @@ export default function MyClaimsList({ claims, employee, onNew, onEdit }: Props)
                   </TableCell>
                   <TableCell className="text-right font-medium tabular-nums">{fmtRM(c.amount)}</TableCell>
                   <TableCell>
-                    <StatusBadge status={c.status} />
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <StatusBadge status={c.status} />
+                      {c.status === 'draft' && c.aiExtracted && <AiBadge />}
+                    </div>
                   </TableCell>
                   <TableCell>
                     <Pipeline status={c.status} />
@@ -352,8 +369,9 @@ export default function MyClaimsList({ claims, employee, onNew, onEdit }: Props)
                   {remarkLine(c)}
                 </div>
                 <div className="flex items-center justify-between gap-2 border-t pt-3">
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     <StatusBadge status={c.status} />
+                    {c.status === 'draft' && c.aiExtracted && <AiBadge />}
                     <Pipeline status={c.status} />
                   </div>
                   {actionsFor(c, true)}

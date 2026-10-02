@@ -3,6 +3,7 @@
  * All statutory figures come from src/lib/statutory.ts — nothing hardcoded.
  */
 import { MINIMUM_WAGE } from '@/lib/statutory';
+import { applicabilityToTriState, triStateToApplicability } from '@/lib/statutoryEligibility';
 import { daysBetween } from '@/lib/utils';
 import type { Department, Employee, Position } from '@/lib/types';
 import { carryInOf } from './types';
@@ -127,6 +128,8 @@ export function emptyForm(): EmployeeFormState {
     gender: 'male',
     fixedAllowances: [],
     resignDate: '',
+    epfApplicable: 'auto',
+    socsoApplicable: 'auto',
   };
 }
 
@@ -163,6 +166,8 @@ export function formFromEmployee(emp: Employee): EmployeeFormState {
       amount: String(a.amount),
     })),
     resignDate: emp.resignDate ?? '',
+    epfApplicable: applicabilityToTriState(emp.epfApplicable),
+    socsoApplicable: applicabilityToTriState(emp.socsoApplicable),
   };
 }
 
@@ -268,7 +273,9 @@ export function validateForm(
 
   if (inStep('statutory')) {
     // Malaysian citizens/PR must be EPF members — block the wizard gate without it.
-    if (!form.isForeignWorker && !form.epfNo.trim())
+    // Not required when EPF is explicitly marked not applicable (standing rule,
+    // e.g. an independent contractor on a contract for service).
+    if (!form.isForeignWorker && form.epfApplicable !== 'no' && !form.epfNo.trim())
       errors.statutory = 'EPF / KWSP member no. is required for Malaysian employees';
   }
 
@@ -350,6 +357,10 @@ export function employeeFromForm(
     // db.update is a shallow merge — always emit the key so a stale resignDate
     // is explicitly cleared on reactivation (undefined is dropped on save).
     resignDate: form.status === 'resigned' && form.resignDate ? form.resignDate : undefined,
+    // Same merge caveat: 'auto' persists as null so a previous override is
+    // explicitly cleared (null/undefined = AUTO resolution).
+    epfApplicable: triStateToApplicability(form.epfApplicable),
+    socsoApplicable: triStateToApplicability(form.socsoApplicable),
   };
 
   // Same merge caveat for ytdCarryIn — always emit the key so toggling TP3 off

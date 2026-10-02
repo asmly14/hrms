@@ -32,6 +32,7 @@ import {
 } from '@/lib/payItems';
 import { BENEFIT_TREATMENT_LABELS, benefitsForMonth } from '@/lib/benefits';
 import { LEGACY_EARNING_TAGS } from '@/lib/statutory';
+import { resolveStatutoryEligibility } from '@/lib/statutoryEligibility';
 import { uid } from '@/lib/db';
 import { cn, fmtRM, round2 } from '@/lib/utils';
 import type {
@@ -248,6 +249,16 @@ export default function EmployeeAdjustDialog({
   const live = preview ?? payslip;
   const earnPreset = payItemPreset(earnPresetKey);
   const workedUnit = WORKED_UNIT_LABELS[basic.salaryType];
+  // Per-employee standing rule (lib/statutoryEligibility.ts) — distinct from
+  // the per-run opt-outs below: a not-applicable scheme is zeroed by the
+  // engine regardless of this dialog and its opt-out checkbox is disabled.
+  const standing = resolveStatutoryEligibility(employee);
+  const standingNA: Record<StatutoryOptOutKey, string | null> = {
+    epf: live.epfApplicable === false ? (standing.epfReason ?? 'EPF not applicable') : null,
+    socso: live.socsoApplicable === false ? (standing.socsoReason ?? 'SOCSO not applicable') : null,
+    eis: live.eisApplicable === false ? (standing.eisReason ?? 'EIS not applicable') : null,
+    pcb: null, // no PCB standing rule — per-run opt-out only
+  };
   const liveDeductions = round2(
     live.epfEmployee + live.socsoEmployee + live.eisEmployee + live.pcb +
     live.unpaidLeaveDeduction + (live.adjustmentDeductions ?? 0) + (live.loanDeductionTotal ?? 0),
@@ -587,29 +598,49 @@ export default function EmployeeAdjustDialog({
           <section className="space-y-3 rounded-xl border p-3">
             <p className="text-sm font-medium">Deductions</p>
 
-            {/* Statutory lines with per-item opt-outs */}
+            {/* Statutory lines: standing-rule 'Not applicable' state, else per-item opt-outs */}
             <ul className="space-y-2">
               {STATUTORY_DEDUCTIONS.map((s) => {
                 const excluded = optOuts[s.key];
+                const na = standingNA[s.key];
                 return (
                   <li key={s.key} className="space-y-1.5 rounded-lg border px-2.5 py-2">
                     <div className="flex items-center gap-2">
                       <Checkbox
                         id={`optout-${s.key}`}
-                        checked={excluded}
+                        checked={na ? false : excluded}
+                        disabled={na !== null}
                         onCheckedChange={(c) =>
                           setOptOuts((cur) => ({ ...cur, [s.key]: c === true }))
                         }
                       />
-                      <Label htmlFor={`optout-${s.key}`} className="flex-1 cursor-pointer text-sm font-normal">
+                      <Label
+                        htmlFor={`optout-${s.key}`}
+                        className={cn('flex-1 text-sm font-normal', na ? '' : 'cursor-pointer')}
+                      >
                         {s.label}
                         <span className="ml-1 text-xs text-muted-foreground">
-                          {excluded ? 'opted out' : fmtRM(statutoryAmount(live, s.key))}
+                          {na ? 'not applicable' : excluded ? 'opted out' : fmtRM(statutoryAmount(live, s.key))}
                         </span>
                       </Label>
-                      <span className="text-xs text-muted-foreground">opt out</span>
+                      {na ? (
+                        <Badge
+                          variant="outline"
+                          className="border-amber-400 text-[10px] text-amber-700 dark:text-amber-500"
+                        >
+                          Not applicable
+                        </Badge>
+                      ) : (
+                        <span className="text-xs text-muted-foreground">opt out</span>
+                      )}
                     </div>
-                    {excluded && (
+                    {na && (
+                      <p className="rounded-md bg-stone-50 p-2 text-[11px] text-muted-foreground dark:bg-stone-900/40">
+                        {na} — standing rule on the employee record (Edit employee → Statutory).
+                        Applies to every run; distinct from a per-run opt-out.
+                      </p>
+                    )}
+                    {!na && excluded && (
                       <div className="space-y-1.5 rounded-md border border-amber-300 bg-amber-50 p-2 dark:border-amber-900/40 dark:bg-amber-950/30">
                         <p className="flex items-start gap-1.5 text-[11px] text-amber-800 dark:text-amber-500">
                           <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
@@ -725,9 +756,24 @@ export default function EmployeeAdjustDialog({
               <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
                 Employer contributions
               </p>
-              <PanelRow label="EPF" value={fmtRM(live.epfEmployer)} small muted={live.excludeEpf} />
-              <PanelRow label="SOCSO" value={fmtRM(live.socsoEmployer)} small muted={live.excludeSocso} />
-              <PanelRow label="EIS" value={fmtRM(live.eisEmployer)} small muted={live.excludeEis} />
+              <PanelRow
+                label="EPF"
+                value={live.epfApplicable === false ? 'Not applicable' : fmtRM(live.epfEmployer)}
+                small
+                muted={live.excludeEpf || live.epfApplicable === false}
+              />
+              <PanelRow
+                label="SOCSO"
+                value={live.socsoApplicable === false ? 'Not applicable' : fmtRM(live.socsoEmployer)}
+                small
+                muted={live.excludeSocso || live.socsoApplicable === false}
+              />
+              <PanelRow
+                label="EIS"
+                value={live.eisApplicable === false ? 'Not applicable' : fmtRM(live.eisEmployer)}
+                small
+                muted={live.excludeEis || live.eisApplicable === false}
+              />
               <PanelRow label="HRD levy" value={fmtRM(live.hrdLevy)} small />
               <PanelRow
                 label="Total employer cost"

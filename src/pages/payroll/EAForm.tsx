@@ -7,6 +7,7 @@ import { useMemo, useState } from 'react';
 import { FileText, Printer } from 'lucide-react';
 import { toast } from 'sonner';
 import { useCollection } from '@/lib/db';
+import { eaBikTotals } from '@/lib/benefits';
 import { fmtRM, round2 } from '@/lib/utils';
 import type {
   Department, Employee, Payslip, Position, Settings as CompanySettings,
@@ -99,6 +100,10 @@ export default function EAFormDialog({
       net: sum((p) => p.netPay),
     };
   }, [slips]);
+
+  // BIK s.13(1)(b) — annual non-cash benefit totals per item, listed
+  // separately from cash remuneration per the LHDN EA structure (lib/benefits).
+  const bik = useMemo(() => eaBikTotals(slips), [slips]);
 
   const company = settingsItems[0];
   const dept = emp ? departments.find((d) => d.id === emp.departmentId) : undefined;
@@ -213,7 +218,7 @@ export default function EAFormDialog({
                     {row('Fixed allowances', fmtRM(t.allowances))}
                     {row('Overtime payments', fmtRM(t.ot))}
                     {row('Gross remuneration', fmtRM(t.gross))}
-                    {row('Benefits-in-kind (BIK)', fmtRM(0))}
+                    {row('Benefits-in-kind (BIK)', fmtRM(bik.total))}
                     {row('Value of living accommodation (VOLA)', fmtRM(0))}
                   </tbody>
                   <tfoot>
@@ -256,6 +261,37 @@ export default function EAFormDialog({
                 </table>
               </div>
             </div>
+
+            {/* Part C — Benefits in kind (s.13(1)(b)): annual per-item totals
+                from non-cash-bik benefits, listed separately from cash
+                remuneration per the LHDN EA structure. Rendered only when the
+                year actually carries BIK; the Part B memo row above already
+                carries the headline total. */}
+            {bik.items.length > 0 && (
+              <div className="mt-5">
+                <p className="text-sm font-semibold">Benefits in kind (s.13(1)(b))</p>
+                <p className="mt-0.5 text-[11px] text-muted-foreground print-text-muted">
+                  Non-cash perquisites taxable via TP2 — separate from cash remuneration above;
+                  not EPF/SOCSO/EIS wages.
+                </p>
+                <table className="mt-2 w-full">
+                  <tbody>
+                    {bik.items.map((item) =>
+                      row(
+                        `${item.name}${item.months > 1 ? ` (${item.months} months)` : ''}`,
+                        fmtRM(item.total),
+                      ),
+                    )}
+                  </tbody>
+                  <tfoot>
+                    <tr className="border-t font-semibold">
+                      <td className="py-1.5 text-sm">Total benefits in kind</td>
+                      <td className="py-1.5 text-right text-sm tabular-nums">{fmtRM(bik.total)}</td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+            )}
 
             <Separator className="my-4" />
             <div className="flex items-end justify-between">

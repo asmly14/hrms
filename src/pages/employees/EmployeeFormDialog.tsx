@@ -210,7 +210,7 @@ export function EmployeeFormDialog({ open, onOpenChange, employee, onSaved }: Em
           <Separator />
           <section className="space-y-3">
             <h3 className="text-sm font-semibold text-foreground">Statutory numbers</h3>
-            <StatutoryFields form={form} patch={patch} errors={errors} />
+            <StatutoryFields form={form} patch={patch} errors={errors} employeeId={employee?.id} />
           </section>
           <Separator />
           <section className="space-y-3">

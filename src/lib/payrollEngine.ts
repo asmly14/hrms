@@ -45,6 +45,14 @@
  * Statutory opt-outs (excludeEpf/Socso/Eis/Pcb) zero BOTH the employee and
  * employer shares of that scheme for the run and are recorded on the payslip
  * with their reason; the payslip prints a zero '— opted out (reason)' line.
+ * Statutory APPLICABILITY (lib/statutoryEligibility.ts) is the per-employee
+ * standing rule, resolved every run: AUTO by default (an in-force linked
+ * contract FOR service marks an independent contractor — EPF/SOCSO/EIS all
+ * off), with a per-scheme employer override on the employee record
+ * (Employee.epfApplicable / socsoApplicable; null/undefined = auto, EIS
+ * follows SOCSO). A not-applicable scheme zeroes both shares, prints a zero
+ * '… not applicable — …' info line, and is excluded from the matching
+ * statutory output tables (EPF Form A / SOCSO 8A / EIS).
  *
  * Proration (lib/workdays.ts): mid-month joiners/leavers get prorated basic +
  * fixed allowances, and unpaid leave is deducted on the SAME basis — the
@@ -83,6 +91,8 @@ import {
   calcEPF, calcSOCSO, calcEIS, calcPCB, calcOT, hrdfLevy, annualTax, PCB_RELIEFS,
   hourlyFromMonthly, orpFromMonthly, MINIMUM_WAGE, MAX_OT_HOURS_MONTH,
 } from './statutory';
+import { resolveStatutoryEligibility } from './statutoryEligibility';
+import { CONTRACTS_COLLECTION, type EmploymentContract } from './contracts';
 import {
   PRORATION_LABELS, calendarDaysInMonth, prorate, resolveProrationMethod,
   unpaidLeaveDaysInMonth, workingDaysInMonth,
@@ -312,9 +322,14 @@ export function ytdForPcb(employeeId: string, month: string): YtdBasis {
   const age = ageFromDob(emp.dateOfBirth, new Date(`${month}-28T00:00:00`));
   const allowances = round2((emp.fixedAllowances ?? []).reduce((s, a) => s + a.amount, 0));
   const gross = round2(emp.baseSalary + allowances);
-  const epf = calcEPF(gross, age, !emp.isForeignWorker, emp.isForeignWorker);
-  const socso = calcSOCSO(gross, age);
-  const eis = calcEIS(gross, age, !emp.isForeignWorker);
+  // Standing-rule applicability gates the estimate too — a not-applicable
+  // scheme (contract for service / employer override) contributes no relief.
+  const elig = resolveStatutoryEligibility(emp, undefined, new Date(`${month}-28T00:00:00`));
+  const epf = elig.epf
+    ? calcEPF(gross, age, !emp.isForeignWorker, emp.isForeignWorker)
+    : { employee: 0, employer: 0 };
+  const socso = elig.socso ? calcSOCSO(gross, age) : { employee: 0, employer: 0 };
+  const eis = elig.eis ? calcEIS(gross, age, !emp.isForeignWorker) : { employee: 0, employer: 0 };
   return estimateYtdBasis(emp, monthIndex, gross, epf.employee, round2(socso.employee + eis.employee));
 }
 
@@ -353,6 +368,9 @@ interface PayslipCtx {
   attendance: AttendanceRecord[];
   leaves: LeaveRequest[];
   claims: Claim[];
+  /** Contracts snapshot for per-employee statutory applicability resolution
+   *  (lib/statutoryEligibility.ts — contract FOR service → all schemes off). */
+  contracts: EmploymentContract[];
   numLocal: number;
   /** Standard daily working hours (Settings.standardDailyHours, default 8) —
    *  base-hours unit for hourly-rated worked-hour counting. */
@@ -370,6 +388,7 @@ function buildCtx(month: string, runId: string, method: PayrollProrationMethod, 
     attendance: getCollection<AttendanceRecord>('attendance'),
     leaves: getCollection<LeaveRequest>('leaves'),
     claims: getCollection<Claim>('claims'),
+    contracts: getCollection<EmploymentContract>(CONTRACTS_COLLECTION),
     numLocal: getCollection<Employee>('employees').filter(
       (e) => !e.isForeignWorker && e.status !== 'resigned',
     ).length,
@@ -547,19 +566,34 @@ function computePayslip(emp: Employee, ctx: PayslipCtx, edit: PayslipEditInput =
   const socsoBase = round2(basicPay + allowanceTotal + otPay + untaggedTotal + taggedSum((a) => a.tags!.socso));
   const eisBase = round2(basicPay + allowanceTotal + otPay + untaggedTotal + taggedSum((a) => a.tags!.eis));
 
+  // ── Statutory applicability standing rule (lib/statutoryEligibility.ts) ──
+  // Resolved per employee per run: AUTO from the employment type + in-force
+  // linked contracts (contract FOR service → all schemes off), unless the
+  // employer set an explicit override on the employee record. When a scheme
+  // is NOT applicable BOTH shares are zeroed and the payslip prints an info
+  // line ('EPF not applicable — contract for service' / '— employer override')
+  // — distinct from the per-run opt-outs below (those are one-off, reasoned,
+  //  and printed as zero deduction lines).
+  const eligibility = resolveStatutoryEligibility(
+    emp, ctx.contracts, new Date(`${month}-28T00:00:00`),
+  );
+  const epfNA = !eligibility.epf;
+  const socsoNA = !eligibility.socso;
+  const eisNA = !eligibility.eis;
+
   // ── Statutory opt-outs: zero BOTH shares of the opted-out scheme ──
   const excludeEpf = edit.excludeEpf === true;
   const excludeSocso = edit.excludeSocso === true;
   const excludeEis = edit.excludeEis === true;
   const excludePcb = edit.excludePcb === true;
 
-  const epf = excludeEpf
+  const epf = excludeEpf || epfNA
     ? { employee: 0, employer: 0 }
     : calcEPF(epfBase, age, !emp.isForeignWorker, emp.isForeignWorker);
-  const socso = excludeSocso
+  const socso = excludeSocso || socsoNA
     ? { employee: 0, employer: 0, category: (age >= 60 ? 2 : 1) as 1 | 2 }
     : calcSOCSO(socsoBase, age);
-  const eis = excludeEis
+  const eis = excludeEis || eisNA
     ? { employee: 0, employer: 0 }
     : calcEIS(eisBase, age, !emp.isForeignWorker);
 
@@ -738,15 +772,23 @@ function computePayslip(emp: Employee, ctx: PayslipCtx, edit: PayslipEditInput =
       ...(a.kind === 'earning' && (a.nonStatutory || a.nonCash) ? { nonStatutory: true as const } : {}),
       ...(a.kind === 'earning' && a.nonCash ? { nonCash: true as const } : {}),
     })),
-    ...(excludeEpf
-      ? [{ label: `EPF employee${optOutSuffix('epf')}`, amount: 0, kind: 'deduction' as const }]
-      : [{ label: `EPF employee (${epfEmployeeRateLabel(emp, age)})`, amount: -epf.employee, kind: 'deduction' as const }]),
-    ...(excludeSocso
-      ? [{ label: `SOCSO employee${optOutSuffix('socso')}`, amount: 0, kind: 'deduction' as const }]
-      : [{ label: 'SOCSO employee', amount: -socso.employee, kind: 'deduction' as const }]),
-    ...(excludeEis
-      ? [{ label: `EIS employee${optOutSuffix('eis')}`, amount: 0, kind: 'deduction' as const }]
-      : [{ label: 'EIS employee', amount: -eis.employee, kind: 'deduction' as const }]),
+    // Standing-rule not applicable → a zero info line (per-employee rule);
+    // per-run opt-out → a zero deduction line with the stored reason.
+    ...(epfNA
+      ? [{ label: eligibility.epfReason ?? 'EPF not applicable', amount: 0, kind: 'info' as const }]
+      : excludeEpf
+        ? [{ label: `EPF employee${optOutSuffix('epf')}`, amount: 0, kind: 'deduction' as const }]
+        : [{ label: `EPF employee (${epfEmployeeRateLabel(emp, age)})`, amount: -epf.employee, kind: 'deduction' as const }]),
+    ...(socsoNA
+      ? [{ label: eligibility.socsoReason ?? 'SOCSO not applicable', amount: 0, kind: 'info' as const }]
+      : excludeSocso
+        ? [{ label: `SOCSO employee${optOutSuffix('socso')}`, amount: 0, kind: 'deduction' as const }]
+        : [{ label: 'SOCSO employee', amount: -socso.employee, kind: 'deduction' as const }]),
+    ...(eisNA
+      ? [{ label: eligibility.eisReason ?? 'EIS not applicable', amount: 0, kind: 'info' as const }]
+      : excludeEis
+        ? [{ label: `EIS employee${optOutSuffix('eis')}`, amount: 0, kind: 'deduction' as const }]
+        : [{ label: 'EIS employee', amount: -eis.employee, kind: 'deduction' as const }]),
     ...(excludePcb
       ? [{ label: `PCB / MTD${optOutSuffix('pcb')}`, amount: 0, kind: 'deduction' as const }]
       : [{ label: 'PCB / MTD', amount: -pcb, kind: 'deduction' as const }]),
@@ -783,15 +825,21 @@ function computePayslip(emp: Employee, ctx: PayslipCtx, edit: PayslipEditInput =
       ...(b.treatment === 'nonStatutory-reimbursement' ? { nonStatutory: true as const } : {}),
       ...(b.treatment === 'non-cash-bik' ? { nonCash: true as const } : {}),
     })),
-    ...(excludeEpf
-      ? [{ label: `EPF employer${optOutSuffix('epf')}`, amount: 0, kind: 'employer' as const }]
-      : [{ label: `EPF employer (${epfEmployerRateLabel(emp, age, epfBase)})`, amount: epf.employer, kind: 'employer' as const }]),
-    ...(excludeSocso
-      ? [{ label: `SOCSO employer${optOutSuffix('socso')}`, amount: 0, kind: 'employer' as const }]
-      : [{ label: 'SOCSO employer', amount: socso.employer, kind: 'employer' as const }]),
-    ...(excludeEis
-      ? [{ label: `EIS employer${optOutSuffix('eis')}`, amount: 0, kind: 'employer' as const }]
-      : [{ label: 'EIS employer', amount: eis.employer, kind: 'employer' as const }]),
+    ...(epfNA
+      ? [] // not applicable — covered by the info line above (both shares 0)
+      : excludeEpf
+        ? [{ label: `EPF employer${optOutSuffix('epf')}`, amount: 0, kind: 'employer' as const }]
+        : [{ label: `EPF employer (${epfEmployerRateLabel(emp, age, epfBase)})`, amount: epf.employer, kind: 'employer' as const }]),
+    ...(socsoNA
+      ? []
+      : excludeSocso
+        ? [{ label: `SOCSO employer${optOutSuffix('socso')}`, amount: 0, kind: 'employer' as const }]
+        : [{ label: 'SOCSO employer', amount: socso.employer, kind: 'employer' as const }]),
+    ...(eisNA
+      ? []
+      : excludeEis
+        ? [{ label: `EIS employer${optOutSuffix('eis')}`, amount: 0, kind: 'employer' as const }]
+        : [{ label: 'EIS employer', amount: eis.employer, kind: 'employer' as const }]),
     { label: 'HRD Corp levy', amount: hrd, kind: 'employer' },
   ];
 
@@ -856,6 +904,19 @@ function computePayslip(emp: Employee, ctx: PayslipCtx, edit: PayslipEditInput =
     ...(excludePcb ? { excludePcb: true } : {}),
     ...(excludeEpf || excludeSocso || excludeEis || excludePcb
       ? { optOutReasons: edit.optOutReasons ?? {} }
+      : {}),
+    // ── Statutory applicability resolution (additive; absent when every scheme
+    //  is applicable under AUTO — legacy payslip shape unchanged) ──
+    ...(epfNA || socsoNA || eisNA || eligibility.source === 'override'
+      ? {
+          epfApplicable: eligibility.epf,
+          socsoApplicable: eligibility.socso,
+          eisApplicable: eligibility.eis,
+          statutoryApplicabilitySource: eligibility.source as 'override' | 'auto',
+          ...(eligibility.reasons.length > 0
+            ? { statutoryApplicabilityReasons: eligibility.reasons }
+            : {}),
+        }
       : {}),
     // ── Loans & benefits (additive; absent when none — legacy slips unchanged) ──
     ...(loanDeductions.length > 0 ? { loanDeductions, loanDeductionTotal } : {}),

@@ -41,6 +41,23 @@ export default function StatutoryOutputs({ run, slips, empMap, settings }: Props
   const mk = run.monthKey;
 
   const sum = (fn: (p: Payslip) => number) => round2(slips.reduce((s, p) => s + fn(p), 0));
+  const sumOf = (list: Payslip[], fn: (p: Payslip) => number) =>
+    round2(list.reduce((s, p) => s + fn(p), 0));
+
+  // Standing-rule applicability (lib/statutoryEligibility.ts, recorded on the
+  // payslip at run time): not-applicable employees are EXCLUDED from the
+  // matching scheme's statutory table + CSV, with a note — their wages are not
+  // declared to that scheme at all (absent flag on legacy payslips = included).
+  const epfSlips = slips.filter((p) => p.epfApplicable !== false);
+  const socsoSlips = slips.filter((p) => p.socsoApplicable !== false);
+  const eisSlips = slips.filter((p) => p.eisApplicable !== false);
+  const epfExcluded = slips.filter((p) => p.epfApplicable === false);
+  const socsoExcluded = slips.filter((p) => p.socsoApplicable === false);
+  const eisExcluded = slips.filter((p) => p.eisApplicable === false);
+  const exclusionNote = (scheme: string, excluded: Payslip[]) =>
+    `Excluded — ${scheme} not applicable (per-employee standing rule): ${excluded
+      .map((p) => name(p))
+      .join(', ')}.`;
 
   // B6 — employees without bank details would ship blank giro fields.
   const missingBank = slips.filter((p) => {
@@ -72,11 +89,11 @@ export default function StatutoryOutputs({ run, slips, empMap, settings }: Props
                 onClick={() =>
                   dl('epf-form-a', [
                     ['No', 'Employee Name', 'EPF No', 'Wages (RM)', 'Employee Share (RM)', 'Employer Share (RM)', 'Total (RM)'],
-                    ...slips.map((p, i) => [
+                    ...epfSlips.map((p, i) => [
                       i + 1, name(p), epfNo(p), num2(epfBase(p)),
                       num2(p.epfEmployee), num2(p.epfEmployer), num2(round2(p.epfEmployee + p.epfEmployer)),
                     ]),
-                    ['', 'TOTAL', '', num2(sum(epfBase)), num2(sum((p) => p.epfEmployee)), num2(sum((p) => p.epfEmployer)), num2(sum((p) => p.epfEmployee + p.epfEmployer))],
+                    ['', 'TOTAL', '', num2(sumOf(epfSlips, epfBase)), num2(sumOf(epfSlips, (p) => p.epfEmployee)), num2(sumOf(epfSlips, (p) => p.epfEmployer)), num2(sumOf(epfSlips, (p) => p.epfEmployee + p.epfEmployer))],
                   ])
                 }
               >
@@ -86,6 +103,12 @@ export default function StatutoryOutputs({ run, slips, empMap, settings }: Props
           />
         </CardHeader>
         <CardContent>
+          {epfExcluded.length > 0 && (
+            <p className="mb-3 flex items-start gap-1.5 rounded-lg bg-stone-50 p-2 text-xs text-muted-foreground dark:bg-stone-900/40">
+              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              {exclusionNote('EPF', epfExcluded)}
+            </p>
+          )}
           <Table>
             <TableHeader>
               <TableRow>
@@ -99,7 +122,7 @@ export default function StatutoryOutputs({ run, slips, empMap, settings }: Props
               </TableRow>
             </TableHeader>
             <TableBody>
-              {slips.map((p, i) => (
+              {epfSlips.map((p, i) => (
                 <TableRow key={p.id}>
                   <TableCell>{i + 1}</TableCell>
                   <TableCell className="font-medium">{name(p)}</TableCell>
@@ -114,10 +137,10 @@ export default function StatutoryOutputs({ run, slips, empMap, settings }: Props
             <TableFooter>
               <TableRow>
                 <TableCell colSpan={3}>Total</TableCell>
-                <TableCell className="text-right"><Money>{fmtRM(sum(epfBase))}</Money></TableCell>
-                <TableCell className="text-right"><Money>{fmtRM(sum((p) => p.epfEmployee))}</Money></TableCell>
-                <TableCell className="text-right"><Money>{fmtRM(sum((p) => p.epfEmployer))}</Money></TableCell>
-                <TableCell className="text-right"><Money>{fmtRM(sum((p) => p.epfEmployee + p.epfEmployer))}</Money></TableCell>
+                <TableCell className="text-right"><Money>{fmtRM(sumOf(epfSlips, epfBase))}</Money></TableCell>
+                <TableCell className="text-right"><Money>{fmtRM(sumOf(epfSlips, (p) => p.epfEmployee))}</Money></TableCell>
+                <TableCell className="text-right"><Money>{fmtRM(sumOf(epfSlips, (p) => p.epfEmployer))}</Money></TableCell>
+                <TableCell className="text-right"><Money>{fmtRM(sumOf(epfSlips, (p) => p.epfEmployee + p.epfEmployer))}</Money></TableCell>
               </TableRow>
             </TableFooter>
           </Table>
@@ -137,11 +160,11 @@ export default function StatutoryOutputs({ run, slips, empMap, settings }: Props
                 onClick={() =>
                   dl('socso-borang-8a', [
                     ['No', 'Employee Name', 'NRIC', 'SOCSO No', 'Category', 'Wages (RM)', 'Employee (RM)', 'Employer (RM)', 'Total (RM)'],
-                    ...slips.map((p, i) => [
+                    ...socsoSlips.map((p, i) => [
                       i + 1, name(p), ic(p), socsoNo(p), `Cat ${p.socsoCategory}`, num2(p.grossPay),
                       num2(p.socsoEmployee), num2(p.socsoEmployer), num2(round2(p.socsoEmployee + p.socsoEmployer)),
                     ]),
-                    ['', 'TOTAL', '', '', '', num2(sum((p) => p.grossPay)), num2(sum((p) => p.socsoEmployee)), num2(sum((p) => p.socsoEmployer)), num2(sum((p) => p.socsoEmployee + p.socsoEmployer))],
+                    ['', 'TOTAL', '', '', '', num2(sumOf(socsoSlips, (p) => p.grossPay)), num2(sumOf(socsoSlips, (p) => p.socsoEmployee)), num2(sumOf(socsoSlips, (p) => p.socsoEmployer)), num2(sumOf(socsoSlips, (p) => p.socsoEmployee + p.socsoEmployer))],
                   ])
                 }
               >
@@ -151,6 +174,12 @@ export default function StatutoryOutputs({ run, slips, empMap, settings }: Props
           />
         </CardHeader>
         <CardContent>
+          {socsoExcluded.length > 0 && (
+            <p className="mb-3 flex items-start gap-1.5 rounded-lg bg-stone-50 p-2 text-xs text-muted-foreground dark:bg-stone-900/40">
+              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              {exclusionNote('SOCSO', socsoExcluded)}
+            </p>
+          )}
           <Table>
             <TableHeader>
               <TableRow>
@@ -165,7 +194,7 @@ export default function StatutoryOutputs({ run, slips, empMap, settings }: Props
               </TableRow>
             </TableHeader>
             <TableBody>
-              {slips.map((p, i) => (
+              {socsoSlips.map((p, i) => (
                 <TableRow key={p.id}>
                   <TableCell>{i + 1}</TableCell>
                   <TableCell className="font-medium">{name(p)}</TableCell>
@@ -181,10 +210,10 @@ export default function StatutoryOutputs({ run, slips, empMap, settings }: Props
             <TableFooter>
               <TableRow>
                 <TableCell colSpan={4}>Total</TableCell>
-                <TableCell className="text-right"><Money>{fmtRM(sum((p) => p.grossPay))}</Money></TableCell>
-                <TableCell className="text-right"><Money>{fmtRM(sum((p) => p.socsoEmployee))}</Money></TableCell>
-                <TableCell className="text-right"><Money>{fmtRM(sum((p) => p.socsoEmployer))}</Money></TableCell>
-                <TableCell className="text-right"><Money>{fmtRM(sum((p) => p.socsoEmployee + p.socsoEmployer))}</Money></TableCell>
+                <TableCell className="text-right"><Money>{fmtRM(sumOf(socsoSlips, (p) => p.grossPay))}</Money></TableCell>
+                <TableCell className="text-right"><Money>{fmtRM(sumOf(socsoSlips, (p) => p.socsoEmployee))}</Money></TableCell>
+                <TableCell className="text-right"><Money>{fmtRM(sumOf(socsoSlips, (p) => p.socsoEmployer))}</Money></TableCell>
+                <TableCell className="text-right"><Money>{fmtRM(sumOf(socsoSlips, (p) => p.socsoEmployee + p.socsoEmployer))}</Money></TableCell>
               </TableRow>
             </TableFooter>
           </Table>
@@ -204,11 +233,11 @@ export default function StatutoryOutputs({ run, slips, empMap, settings }: Props
                 onClick={() =>
                   dl('eis-sip', [
                     ['No', 'Employee Name', 'NRIC', 'Wages (RM)', 'Employee (RM)', 'Employer (RM)', 'Total (RM)'],
-                    ...slips.map((p, i) => [
+                    ...eisSlips.map((p, i) => [
                       i + 1, name(p), ic(p), num2(p.grossPay),
                       num2(p.eisEmployee), num2(p.eisEmployer), num2(round2(p.eisEmployee + p.eisEmployer)),
                     ]),
-                    ['', 'TOTAL', '', num2(sum((p) => p.grossPay)), num2(sum((p) => p.eisEmployee)), num2(sum((p) => p.eisEmployer)), num2(sum((p) => p.eisEmployee + p.eisEmployer))],
+                    ['', 'TOTAL', '', num2(sumOf(eisSlips, (p) => p.grossPay)), num2(sumOf(eisSlips, (p) => p.eisEmployee)), num2(sumOf(eisSlips, (p) => p.eisEmployer)), num2(sumOf(eisSlips, (p) => p.eisEmployee + p.eisEmployer))],
                   ])
                 }
               >
@@ -218,6 +247,12 @@ export default function StatutoryOutputs({ run, slips, empMap, settings }: Props
           />
         </CardHeader>
         <CardContent>
+          {eisExcluded.length > 0 && (
+            <p className="mb-3 flex items-start gap-1.5 rounded-lg bg-stone-50 p-2 text-xs text-muted-foreground dark:bg-stone-900/40">
+              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              {exclusionNote('EIS', eisExcluded)}
+            </p>
+          )}
           <Table>
             <TableHeader>
               <TableRow>
@@ -231,7 +266,7 @@ export default function StatutoryOutputs({ run, slips, empMap, settings }: Props
               </TableRow>
             </TableHeader>
             <TableBody>
-              {slips.map((p, i) => (
+              {eisSlips.map((p, i) => (
                 <TableRow key={p.id}>
                   <TableCell>{i + 1}</TableCell>
                   <TableCell className="font-medium">{name(p)}</TableCell>
@@ -246,10 +281,10 @@ export default function StatutoryOutputs({ run, slips, empMap, settings }: Props
             <TableFooter>
               <TableRow>
                 <TableCell colSpan={3}>Total</TableCell>
-                <TableCell className="text-right"><Money>{fmtRM(sum((p) => p.grossPay))}</Money></TableCell>
-                <TableCell className="text-right"><Money>{fmtRM(sum((p) => p.eisEmployee))}</Money></TableCell>
-                <TableCell className="text-right"><Money>{fmtRM(sum((p) => p.eisEmployer))}</Money></TableCell>
-                <TableCell className="text-right"><Money>{fmtRM(sum((p) => p.eisEmployee + p.eisEmployer))}</Money></TableCell>
+                <TableCell className="text-right"><Money>{fmtRM(sumOf(eisSlips, (p) => p.grossPay))}</Money></TableCell>
+                <TableCell className="text-right"><Money>{fmtRM(sumOf(eisSlips, (p) => p.eisEmployee))}</Money></TableCell>
+                <TableCell className="text-right"><Money>{fmtRM(sumOf(eisSlips, (p) => p.eisEmployer))}</Money></TableCell>
+                <TableCell className="text-right"><Money>{fmtRM(sumOf(eisSlips, (p) => p.eisEmployee + p.eisEmployer))}</Money></TableCell>
               </TableRow>
             </TableFooter>
           </Table>

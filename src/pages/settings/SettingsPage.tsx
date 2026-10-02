@@ -1,7 +1,8 @@
 /**
  * Settings & admin (M9) — /settings.
- * Eight sections in tabs: company profile, organization, locations &
- * geofence, payroll, leave policy, users & roles, audit log, data management.
+ * Nine sections in tabs: company profile, organization, locations &
+ * geofence, payroll, leave policy, users & roles, audit log, integrations,
+ * data management.
  *
  * MULTI-TENANT: deep per-company customization (branding, module toggles,
  * work & payroll policy, custom employee fields) now lives in Company Setup
@@ -10,13 +11,15 @@
  */
 import { Link } from 'react-router-dom';
 import {
-  Building2, CalendarClock, CalendarHeart, DatabaseBackup, MapPin, Network, ScrollText, ShieldCheck,
+  Building2, CalendarClock, CalendarHeart, DatabaseBackup, MapPin, Network, Plug, ScrollText,
+  ShieldCheck,
 } from 'lucide-react';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import AuditSection from './sections/AuditSection';
 import CompanySection from './sections/CompanySection';
 import DataSection from './sections/DataSection';
+import IntegrationsSection from './sections/IntegrationsSection';
 import LeavePolicySection from './sections/LeavePolicySection';
 import LocationsSection from './sections/LocationsSection';
 import OrgSection from './sections/OrgSection';
@@ -31,6 +34,7 @@ const SECTIONS = [
   { value: 'leave', label: 'Leave Policy', icon: CalendarHeart },
   { value: 'users', label: 'Users & Roles', icon: ShieldCheck },
   { value: 'audit', label: 'Audit Log', icon: ScrollText },
+  { value: 'integrations', label: 'Integrations', icon: Plug },
   { value: 'data', label: 'Data', icon: DatabaseBackup },
 ] as const;
 
@@ -88,6 +92,9 @@ export default function SettingsPage() {
         </TabsContent>
         <TabsContent value="audit">
           <AuditSection />
+        </TabsContent>
+        <TabsContent value="integrations">
+          <IntegrationsSection />
         </TabsContent>
         <TabsContent value="data">
           <DataSection />

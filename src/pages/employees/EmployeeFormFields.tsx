@@ -3,6 +3,9 @@
  * Each section is controlled via `form` + `patch` and shows inline errors.
  */
 import { AlertTriangle, Plus, Trash2 } from 'lucide-react';
+import { useCollection } from '@/lib/db';
+import { CONTRACTS_COLLECTION, type EmploymentContract } from '@/lib/contracts';
+import { resolveStatutoryEligibility } from '@/lib/statutoryEligibility';
 import { states } from '@/lib/holidays';
 import type { Department, Position } from '@/lib/types';
 import { Input } from '@/components/ui/input';
@@ -16,7 +19,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import type { CarryInFormState, EmployeeFormState, FormErrors } from './types';
+import type { ApplicabilityChoice, CarryInFormState, EmployeeFormState, FormErrors } from './types';
 import { MY_BANKS, minimumWageWarning } from './helpers';
 
 export type Patch = (patch: Partial<EmployeeFormState>) => void;
@@ -334,7 +337,74 @@ export function EmploymentFields({ form, patch, errors, departments, positions }
   );
 }
 
-export function StatutoryFields({ form, patch, errors }: SectionProps) {
+interface StatutoryFieldsProps extends SectionProps {
+  /** Id of the employee being edited — lets the AUTO preview find their
+   *  linked contracts. Absent in the New-Hire wizard (no contracts yet). */
+  employeeId?: string;
+}
+
+/** One tri-state applicability selector with the AUTO resolution preview. */
+function ApplicabilitySelect({
+  id,
+  label,
+  scheme,
+  choice,
+  onChange,
+  auto,
+}: {
+  id: string;
+  label: string;
+  scheme: 'epf' | 'socso';
+  choice: ApplicabilityChoice;
+  onChange: (v: ApplicabilityChoice) => void;
+  auto: { epf: boolean; socso: boolean; autoBasis: string };
+}) {
+  const applicable = auto[scheme];
+  return (
+    <div className="space-y-1.5">
+      <Label>{label}</Label>
+      <Select value={choice} onValueChange={(v) => onChange(v as ApplicabilityChoice)}>
+        <SelectTrigger id={id} className={inputCls}>
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="auto">Auto (recommended)</SelectItem>
+          <SelectItem value="yes">Applicable</SelectItem>
+          <SelectItem value="no">Not applicable</SelectItem>
+        </SelectContent>
+      </Select>
+      <p className="text-xs text-muted-foreground">
+        {choice === 'auto' ? (
+          <>
+            Auto: {applicable ? 'Applicable' : 'Not applicable'} — {auto.autoBasis}
+          </>
+        ) : (
+          <>
+            Employer override in effect — switch back to Auto to use the automatic rule
+            (auto would say: {applicable ? 'applicable' : 'not applicable'} — {auto.autoBasis}).
+          </>
+        )}
+      </p>
+    </div>
+  );
+}
+
+export function StatutoryFields({ form, patch, errors, employeeId }: StatutoryFieldsProps) {
+  const { items: contracts } = useCollection<EmploymentContract>(CONTRACTS_COLLECTION);
+  // AUTO preview ignores any stored override — it shows what the automatic
+  // rule (employment type + in-force linked contracts) would decide.
+  const auto = resolveStatutoryEligibility(
+    {
+      id: employeeId,
+      employmentType: form.employmentType,
+      isForeignWorker: form.isForeignWorker,
+      dateOfBirth: form.dateOfBirth || undefined,
+      epfApplicable: null,
+      socsoApplicable: null,
+    },
+    contracts,
+  );
+
   return (
     <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
       <div className="space-y-1.5">
@@ -380,6 +450,28 @@ export function StatutoryFields({ form, patch, errors }: SectionProps) {
           onCheckedChange={(v) => patch({ isForeignWorker: v })}
         />
       </div>
+      <ApplicabilitySelect
+        id="f-epf-applicable"
+        label="EPF (KWSP) applicability"
+        scheme="epf"
+        choice={form.epfApplicable}
+        onChange={(v) => patch({ epfApplicable: v })}
+        auto={auto}
+      />
+      <ApplicabilitySelect
+        id="f-socso-applicable"
+        label="SOCSO (PERKESO) applicability"
+        scheme="socso"
+        choice={form.socsoApplicable}
+        onChange={(v) => patch({ socsoApplicable: v })}
+        auto={auto}
+      />
+      <p className="text-xs text-muted-foreground sm:col-span-2">
+        Per-employee standing rule for payroll. EIS follows SOCSO applicability. Contract
+        FOR service staff (independent contractors) resolve to Not applicable automatically;
+        an override here wins over the automatic rule. Distinct from per-run opt-outs in the
+        payroll draft editor.
+      </p>
       {errors.statutory && <FieldError message={errors.statutory} />}
     </div>
   );
