@@ -1,9 +1,10 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, ArrowRight, Check, Landmark, Receipt, ShieldCheck, User, Briefcase } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Check, KeyRound, Landmark, Receipt, ShieldCheck, User, Briefcase } from 'lucide-react';
 import { toast } from 'sonner';
 import { logAudit, useCollection } from '@/lib/db';
 import { useAuth } from '@/lib/useAuth';
+import { useTenant } from '@/lib/useTenant';
 import { cn, fmtRM } from '@/lib/utils';
 import type { Department, Employee, Position } from '@/lib/types';
 import {
@@ -21,6 +22,8 @@ import {
   PersonalFields,
   StatutoryFields,
 } from './EmployeeFormFields';
+import { AccountFields } from './AccountFields';
+import { attemptAccountCreation, useAccountForm } from './accountForm';
 import type { CarryInFormState, EmployeeFormState, FormErrors } from './types';
 import {
   deptName,
@@ -39,6 +42,7 @@ const STEPS = [
   { key: 'statutory', title: 'Statutory', icon: ShieldCheck },
   { key: 'bank', title: 'Bank', icon: Landmark },
   { key: 'tp3', title: 'TP3 carry-in', icon: Receipt },
+  { key: 'account', title: 'Login account', icon: KeyRound },
 ] as const;
 
 type StepKey = (typeof STEPS)[number]['key'];
@@ -51,7 +55,8 @@ interface NewHireWizardProps {
 /**
  * Guided multi-step onboarding: personal → employment → statutory numbers →
  * bank → TP3-style YTD carry-in from the previous employer (stored on the
- * employee record as `ytdCarryIn`). Validates per step before advancing.
+ * employee record as `ytdCarryIn`) → optional login-account creation.
+ * Validates per step before advancing.
  * Admin/HR only — managers and employees cannot create records.
  */
 export function NewHireWizard({ open, onOpenChange }: NewHireWizardProps) {
@@ -63,11 +68,15 @@ export function NewHireWizard({ open, onOpenChange }: NewHireWizardProps) {
   const { items: employees, add } = useCollection<Employee>('employees');
   const { items: departments } = useCollection<Department>('departments');
   const { items: positions } = useCollection<Position>('positions');
+  const { activeCompany } = useTenant();
 
   const [step, setStep] = useState(0);
   const [form, setForm] = useState<EmployeeFormState>(emptyForm());
   const [carryIn, setCarryIn] = useState<CarryInFormState>(emptyCarryIn());
   const [errors, setErrors] = useState<FormErrors>({});
+  // Optional login-account step (last). Username auto-syncs from email until
+  // manually edited.
+  const { account, patchAccount, resetAccount } = useAccountForm(form.email, activeCompany?.code);
 
   // Reset the wizard each time the dialog opens — render-phase adjust on the
   // open edge, no effect.
@@ -79,6 +88,7 @@ export function NewHireWizard({ open, onOpenChange }: NewHireWizardProps) {
       setForm(emptyForm());
       setCarryIn(emptyCarryIn());
       setErrors({});
+      resetAccount();
     }
   }
 
@@ -94,7 +104,9 @@ export function NewHireWizard({ open, onOpenChange }: NewHireWizardProps) {
   const stepKey: StepKey = STEPS[step].key;
 
   const next = () => {
-    if (stepKey !== 'tp3') {
+    // tp3 carry-in has its own validator on finish; the account step is
+    // optional and never blocks advancing.
+    if (stepKey !== 'tp3' && stepKey !== 'account') {
       const errs = validateForm(form, stepKey);
       setErrors(errs);
       if (Object.keys(errs).length > 0) return;
@@ -134,6 +146,12 @@ export function NewHireWizard({ open, onOpenChange }: NewHireWizardProps) {
       detail: `New hire ${record.name} onboarded via wizard${carryIn.enabled ? ' (TP3 carry-in captured)' : ''}`,
     });
     toast.success(`New hire onboarded: ${record.name}`);
+    // Employee saved FIRST — then the optional login account from the last
+    // step. A failure (e.g. duplicate username) toasts an error; the employee
+    // record is kept either way.
+    if (account.enabled && account.username.trim() && account.password && activeCompany) {
+      attemptAccountCreation(account, activeCompany.id, saved.id, actorName);
+    }
     onOpenChange(false);
     navigate(`/employees/${saved.id}`);
   };
@@ -219,6 +237,20 @@ export function NewHireWizard({ open, onOpenChange }: NewHireWizardProps) {
                   </dd>
                 </dl>
               </div>
+            </div>
+          )}
+          {stepKey === 'account' && (
+            <div className="space-y-4">
+              <p className="text-sm text-muted-foreground">
+                Optional final step — give {form.name || 'the new hire'} sign-in access right away, or skip and
+                create the account later from Settings → Users &amp; Roles or the employee page.
+              </p>
+              <AccountFields
+                account={account}
+                patchAccount={patchAccount}
+                email={form.email}
+                companyCode={activeCompany?.code}
+              />
             </div>
           )}
         </div>

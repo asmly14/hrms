@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useSyncExternalStore } from 'react';
 import { Link, Navigate, useNavigate, useParams } from 'react-router-dom';
 import {
   AlertTriangle,
@@ -21,8 +21,16 @@ import {
   Wallet,
 } from 'lucide-react';
 import { getCollection, useCollection } from '@/lib/db';
+import {
+  accountForEmployee,
+  getUsersVersion,
+  setUserStatus,
+  statusOf,
+  subscribeUsers,
+} from '@/lib/auth';
 import { useAuth } from '@/lib/useAuth';
 import { useTenant } from '@/lib/useTenant';
+import { toast } from '@/lib/toast';
 import { CONTRACTS_COLLECTION, type EmploymentContract } from '@/lib/contracts';
 import { resolveStatutoryEligibility } from '@/lib/statutoryEligibility';
 import { stateInfo } from '@/lib/holidays';
@@ -31,6 +39,17 @@ import { suggestSalary } from '@/lib/salaryBenchmark';
 import { ageFromDob, cn, fmtDate, fmtRM } from '@/lib/utils';
 import type { Department, Employee, LeaveBalance, Payslip, Position } from '@/lib/types';
 import { displayCustomValue, getEmployeeCustomFields } from '@/pages/company/customFields';
+import { CreateAccountDialog } from '@/components/auth/CreateAccountDialog';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -102,6 +121,8 @@ export default function EmployeeDetailPage() {
   const { role, employeeId, canViewEmployee, user } = useAuth();
   /** Sensitive data (salary, full NRIC/bank) and mutations: Admin/HR only. */
   const isHR = role === 'Admin' || role === 'HR';
+  /** Account lifecycle actions (create / revoke / re-enable) are Admin-only. */
+  const isAdmin = role === 'Admin' || role === 'SuperAdmin';
   const actorName = user?.username ?? 'HR Admin';
 
   const { items: employees } = useCollection<Employee>('employees');
@@ -114,8 +135,18 @@ export default function EmployeeDetailPage() {
 
   const [editOpen, setEditOpen] = useState(false);
   const [extendOpen, setExtendOpen] = useState(false);
+  const [accountCreateOpen, setAccountCreateOpen] = useState(false);
+  const [accountRevokeOpen, setAccountRevokeOpen] = useState(false);
 
   const emp = employees.find((e) => e.id === id);
+
+  // Login account linked to this employee (refreshes via the auth change feed
+  // when accounts are created / revoked / removed elsewhere).
+  const usersVersion = useSyncExternalStore(subscribeUsers, getUsersVersion);
+  const account = useMemo(() => {
+    void usersVersion;
+    return emp ? accountForEmployee(emp.id) : undefined;
+  }, [emp, usersVersion]);
 
   const years = useMemo(() => (emp ? serviceYears(emp.joinDate) : 0), [emp]);
   const benchmark = useMemo(() => {
@@ -207,6 +238,22 @@ export default function EmployeeDetailPage() {
     if (!getCollection<Employee>('employees').some((x) => x.id === emp.id)) {
       navigate('/employees');
     }
+  };
+
+  // Login-account quick actions (Admin). Guards (self / last-admin /
+  // superadmin) live in lib/auth — failures surface as toast errors.
+  const reEnableAccount = () => {
+    if (!account) return;
+    const res = setUserStatus(account.id, 'active', actorName);
+    if (res.ok) toast.success(`Access re-enabled for ${account.username}.`);
+    else toast.error(res.error);
+  };
+  const confirmRevokeAccount = () => {
+    if (!account) return;
+    const res = setUserStatus(account.id, 'disabled', actorName);
+    if (res.ok) toast.success(`Access revoked for ${account.username}. They can no longer sign in.`);
+    else toast.error(res.error);
+    setAccountRevokeOpen(false);
   };
 
   // Benchmark comparison chip (market median for role / seniority / state).
@@ -348,6 +395,43 @@ export default function EmployeeDetailPage() {
             <Row label="Position">{position}</Row>
             <Row label="System role">
               {emp.role.charAt(0).toUpperCase() + emp.role.slice(1)}
+            </Row>
+            <Row label="Login account">
+              <span className="inline-flex flex-wrap items-center justify-end gap-1.5">
+                {!account ? (
+                  <Badge variant="outline" className="text-muted-foreground">
+                    No account
+                  </Badge>
+                ) : statusOf(account) === 'active' ? (
+                  <Badge variant="outline" className="border-transparent bg-lime-100 text-lime-800 dark:bg-lime-950/40 dark:text-lime-400">
+                    Active · {account.username}
+                  </Badge>
+                ) : (
+                  <Badge variant="outline" className="border-transparent bg-orange-100 text-orange-800 dark:bg-orange-950/40 dark:text-orange-400">
+                    Revoked · {account.username}
+                  </Badge>
+                )}
+                {isAdmin && !account && activeCompany && (
+                  <Button size="sm" variant="outline" className="h-7 px-2 text-xs" onClick={() => setAccountCreateOpen(true)}>
+                    Create account
+                  </Button>
+                )}
+                {isAdmin && account && statusOf(account) === 'active' && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-7 px-2 text-xs text-orange-700 hover:text-orange-800"
+                    onClick={() => setAccountRevokeOpen(true)}
+                  >
+                    Revoke
+                  </Button>
+                )}
+                {isAdmin && account && statusOf(account) === 'disabled' && (
+                  <Button size="sm" variant="outline" className="h-7 px-2 text-xs" onClick={reEnableAccount}>
+                    Re-enable
+                  </Button>
+                )}
+              </span>
             </Row>
             <Row label="Employment type">
               {emp.employmentType === 'full-time' ? 'Full-time' : emp.employmentType === 'part-time' ? 'Part-time' : 'Contract'}
@@ -676,6 +760,36 @@ export default function EmployeeDetailPage() {
 
       {isHR && (
         <EmployeeFormDialog open={editOpen} onOpenChange={setEditOpen} employee={emp} />
+      )}
+      {isAdmin && activeCompany && (
+        <CreateAccountDialog
+          open={accountCreateOpen}
+          onOpenChange={setAccountCreateOpen}
+          companyId={activeCompany.id}
+          companyCode={activeCompany.code}
+          employees={[emp]}
+          fixedEmployeeId={emp.id}
+          actorName={actorName}
+        />
+      )}
+      {isAdmin && account && (
+        <AlertDialog open={accountRevokeOpen} onOpenChange={setAccountRevokeOpen}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Revoke access for {account.username}?</AlertDialogTitle>
+              <AlertDialogDescription>
+                {emp.name} will no longer be able to sign in. The account and the employee record are kept — you can
+                re-enable access at any time.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction className="bg-orange-600 text-white hover:bg-orange-700" onClick={confirmRevokeAccount}>
+                Revoke access
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       )}
       {isHR && emp.status === 'probation' && (
         <ExtendProbationDialog

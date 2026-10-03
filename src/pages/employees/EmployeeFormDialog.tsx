@@ -25,6 +25,8 @@ import {
   PersonalFields,
   StatutoryFields,
 } from './EmployeeFormFields';
+import { AccountFields } from './AccountFields';
+import { attemptAccountCreation, useAccountForm } from './accountForm';
 import type { CarryInFormState, EmployeeFormState, FormErrors } from './types';
 import { customOf } from './types';
 import {
@@ -65,11 +67,15 @@ export function EmployeeFormDialog({ open, onOpenChange, employee, onSaved }: Em
   const [customValues, setCustomValues] = useState<Record<string, string>>({});
   const [errors, setErrors] = useState<FormErrors>({});
   const [submitted, setSubmitted] = useState(false);
+  // Optional login-account sub-form (create mode only). Username auto-syncs
+  // from the email field until manually edited.
+  const { account, patchAccount, resetAccount } = useAccountForm(form.email, activeCompany?.code);
 
   useEffect(() => {
     if (open) {
       setForm(employee ? formFromEmployee(employee) : emptyForm());
       setCarryIn(employee ? carryInFromEmployee(employee) : emptyCarryIn());
+      resetAccount();
       const stored = employee ? customOf(employee) : {};
       const init: Record<string, string> = {};
       for (const f of customFields) {
@@ -172,6 +178,11 @@ export function EmployeeFormDialog({ open, onOpenChange, employee, onSaved }: Em
         detail: `Added ${record.name} (${record.employmentType})`,
       });
       toast.success(`Employee added: ${record.name}`);
+      // Employee saved FIRST — then the optional login account. A failure here
+      // (e.g. duplicate username) toasts an error and keeps the employee.
+      if (account.enabled && account.username.trim() && account.password && activeCompany) {
+        attemptAccountCreation(account, activeCompany.id, saved.id, actorName);
+      }
     }
     onSaved?.(saved);
     onOpenChange(false);
@@ -217,6 +228,20 @@ export function EmployeeFormDialog({ open, onOpenChange, employee, onSaved }: Em
             <h3 className="text-sm font-semibold text-foreground">Bank</h3>
             <BankFields form={form} patch={patch} errors={errors} />
           </section>
+          {!employee && activeCompany && (
+            <>
+              <Separator />
+              <section className="space-y-3">
+                <h3 className="text-sm font-semibold text-foreground">Login account</h3>
+                <AccountFields
+                  account={account}
+                  patchAccount={patchAccount}
+                  email={form.email}
+                  companyCode={activeCompany.code}
+                />
+              </section>
+            </>
+          )}
           <Separator />
           <section className="space-y-3">
             <h3 className="text-sm font-semibold text-foreground">TP3 carry-in</h3>
