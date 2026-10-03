@@ -25,12 +25,13 @@ import { getCollection, saveCompanies, setActiveTenantId, setCollection } from '
 import { runPayroll } from '../payrollEngine';
 import {
   BENEFIT_CATEGORIES_COLLECTION, DEFAULT_BENEFIT_CATEGORIES, activeBenefitCategories,
-  benefitCategory, benefitSummary, createBenefit, createBenefitCategory, eaBikTotals,
-  getBenefitCategories, suggestCategoryAdvice, updateBenefit, updateBenefitCategory,
+  benefitCategory, benefitSummary, createBenefit, createBenefitCategory, deleteBenefitCategory,
+  eaBikTotals,
+  getBenefitCategories, getBenefits, suggestCategoryAdvice, updateBenefit, updateBenefitCategory,
   type BenefitCategory,
 } from '../benefits';
 import { round2 } from '../utils';
-import type { Company, Employee, Payslip } from '../types';
+import type { AuditLog, Company, Employee, Payslip } from '../types';
 
 const MONTH = '2025-03';
 const CO_A = 'co-asm';
@@ -508,5 +509,58 @@ describe('payroll integration — category-driven treatment → wage bases', () 
     const bik = eaBikTotals(yearSlips);
     expect(bik.items).toEqual([{ name: 'Medical Insurance', total: 360, months: 2 }]);
     expect(bik.total).toBe(360);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Custom-category hard delete (guarded)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('deleteBenefitCategory — custom-category hard delete', () => {
+  it('deletes an unreferenced custom category and audits it', () => {
+    const c = createBenefitCategory({ name: 'Mobile Phone Subsidy', kind: 'other' }, 'hr');
+    expect(deleteBenefitCategory(c.id, 'hr')).toBe(true);
+    expect(benefitCategory(c.id)).toBeUndefined();
+    // Seeded defaults are untouched.
+    expect(getBenefitCategories()).toHaveLength(DEFAULT_BENEFIT_CATEGORIES.length);
+    const audit = getCollection<AuditLog>('audit').find((e) => e.action === 'benefitCategories.delete');
+    expect(audit?.entityId).toBe(c.id);
+    expect(audit?.actorName).toBe('hr');
+  });
+
+  it('blocks deletion while ANY assignment references the category', () => {
+    const c = createBenefitCategory({ name: 'Mobile Phone Subsidy', kind: 'other' }, 'hr');
+    createBenefit(
+      {
+        employeeId: emp1.id, benefitKey: 'custom', categoryId: c.id,
+        amount: 100, frequency: 'monthly', startMonth: '2025-01',
+      },
+      'hr',
+    );
+    expect(() => deleteBenefitCategory(c.id, 'hr')).toThrow(/used by 1 benefit assignment/);
+    // The category survives — the offered alternative is deactivation.
+    expect(benefitCategory(c.id)?.active).toBe(true);
+    const off = updateBenefitCategory(c.id, { active: false }, 'hr')!;
+    expect(off.active).toBe(false);
+  });
+
+  it('seeded statutory defaults cannot be deleted — deactivate instead', () => {
+    expect(() => deleteBenefitCategory('bcat-medical', 'hr')).toThrow(/statutory default/);
+    expect(benefitCategory('bcat-medical')).toBeDefined();
+    expect(deleteBenefitCategory('bcat-nope', 'hr')).toBe(false);
+  });
+
+  it("edit with name '' reverts a custom benefit to its category name", () => {
+    const c = createBenefitCategory({ name: 'Mobile Phone Subsidy', kind: 'other' }, 'hr');
+    const b = createBenefit(
+      {
+        employeeId: emp1.id, benefitKey: 'custom', categoryId: c.id, name: 'Phone (director)',
+        amount: 100, frequency: 'monthly', startMonth: '2025-01',
+      },
+      'hr',
+    );
+    const cleared = updateBenefit(b.id, { name: '' }, 'hr')!;
+    expect(cleared.name).toBe('Mobile Phone Subsidy');
+    expect(getBenefits()[0].name).toBe('Mobile Phone Subsidy');
   });
 });

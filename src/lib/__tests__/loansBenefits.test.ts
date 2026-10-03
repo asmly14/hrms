@@ -27,10 +27,11 @@ import {
   type EmployeeLoan,
 } from '../loans';
 import {
-  benefitsForMonth, createBenefit, endBenefit, type RecurringBenefit,
+  benefitsForMonth, createBenefit, deleteBenefit, endBenefit, getBenefit, getBenefits,
+  updateBenefit, type RecurringBenefit,
 } from '../benefits';
 import { round2 } from '../utils';
-import type { Company, Employee, Payslip } from '../types';
+import type { AuditLog, Company, Employee, Payslip } from '../types';
 
 const MONTH = '2025-03';
 
@@ -628,5 +629,124 @@ describe('collection registration', () => {
     expect(getCollection<EmployeeLoan>('loans')).toHaveLength(1);
     expect(getCollection<RecurringBenefit>('benefits')).toHaveLength(1);
     expect(getLoans()).toHaveLength(1);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Benefit edit — explicit clear semantics (dialog no longer omits keys)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('benefit edit — explicit clear semantics', () => {
+  it("endMonth '' removes the end date; omitted keys stay untouched", () => {
+    const b = createBenefit(
+      {
+        employeeId: emp1.id, benefitKey: 'health-insurance', amount: 150,
+        frequency: 'monthly', startMonth: '2025-01', endMonth: '2025-12', notes: 'family plan',
+      },
+      'hr',
+    );
+    const cleared = updateBenefit(b.id, { endMonth: '' }, 'hr')!;
+    expect(cleared.endMonth).toBeUndefined();
+    expect(cleared.notes).toBe('family plan'); // untouched
+    // Open-ended again: injects past December.
+    expect(benefitsForMonth(emp1.id, '2026-06').map((x) => x.id)).toContain(b.id);
+  });
+
+  it("notes '' clears the notes", () => {
+    const b = createBenefit(
+      {
+        employeeId: emp1.id, benefitKey: 'gym-wellness', amount: 80,
+        frequency: 'monthly', startMonth: '2025-01', notes: 'to review',
+      },
+      'hr',
+    );
+    const cleared = updateBenefit(b.id, { notes: '' }, 'hr')!;
+    expect(cleared.notes).toBeUndefined();
+    expect(getBenefit(b.id)?.notes).toBeUndefined();
+  });
+
+  it("name '' reverts a custom display name to the preset label", () => {
+    const b = createBenefit(
+      {
+        employeeId: emp1.id, benefitKey: 'health-insurance', name: 'AIA Gold Plan', amount: 150,
+        frequency: 'monthly', startMonth: '2025-01',
+      },
+      'hr',
+    );
+    const cleared = updateBenefit(b.id, { name: '' }, 'hr')!;
+    expect(cleared.name).toBe('Personal Health Insurance');
+  });
+
+  it('annual → monthly switch drops annualMonth and injects every month', () => {
+    const b = createBenefit(
+      {
+        employeeId: emp1.id, benefitKey: 'group-insurance', amount: 200,
+        frequency: 'annual', annualMonth: 3, startMonth: '2025-01',
+      },
+      'hr',
+    );
+    expect(benefitsForMonth(emp1.id, '2025-04')).toHaveLength(0);
+    const switched = updateBenefit(b.id, { frequency: 'monthly' }, 'hr')!;
+    expect(switched.frequency).toBe('monthly');
+    expect(switched.annualMonth).toBeUndefined();
+    expect(benefitsForMonth(emp1.id, '2025-04').map((x) => x.id)).toContain(b.id);
+  });
+
+  it('monthly → annual keeps annualMonth coherent via the patch', () => {
+    const b = createBenefit(
+      { employeeId: emp1.id, benefitKey: 'gym-wellness', amount: 80, frequency: 'monthly', startMonth: '2025-01' },
+      'hr',
+    );
+    const switched = updateBenefit(b.id, { frequency: 'annual', annualMonth: 6 }, 'hr')!;
+    expect(switched.annualMonth).toBe(6);
+    expect(benefitsForMonth(emp1.id, '2025-05')).toHaveLength(0);
+    expect(benefitsForMonth(emp1.id, '2025-06').map((x) => x.id)).toContain(b.id);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// deleteBenefit — hard delete (payslips are snapshots)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('deleteBenefit — hard delete', () => {
+  it('removes the row entirely and audits it', () => {
+    const b = createBenefit(
+      { employeeId: emp1.id, benefitKey: 'gym-wellness', amount: 80, frequency: 'monthly', startMonth: '2025-01' },
+      'hr',
+    );
+    expect(deleteBenefit(b.id, 'hr')).toBe(true);
+    expect(getBenefits()).toHaveLength(0);
+    expect(getBenefit(b.id)).toBeUndefined();
+    const audit = getCollection<AuditLog>('audit').find((e) => e.action === 'benefits.delete');
+    expect(audit?.entityId).toBe(b.id);
+    expect(audit?.actorName).toBe('hr');
+    expect(audit?.detail).toContain('Gym / Wellness');
+    expect(deleteBenefit('no-such-id', 'hr')).toBe(false);
+  });
+
+  it('removes ended/cancelled history rows too (unlike end/cancel)', () => {
+    const b = createBenefit(
+      { employeeId: emp1.id, benefitKey: 'gym-wellness', amount: 80, frequency: 'monthly', startMonth: '2025-01' },
+      'hr',
+    );
+    endBenefit(b.id, 'hr', MONTH);
+    expect(getBenefit(b.id)?.status).toBe('ended');
+    deleteBenefit(b.id, 'hr');
+    expect(getBenefits()).toHaveLength(0);
+  });
+
+  it('stops future injections; a draft payslip excluding the id stays valid', () => {
+    const b = createBenefit(
+      { employeeId: emp1.id, benefitKey: 'health-insurance', amount: 150, frequency: 'monthly', startMonth: '2025-01' },
+      'hr',
+    );
+    const { run } = runPayroll(MONTH, undefined, 'test', { draft: true });
+    updateDraftPayslip(run.id, emp1.id, { excludeBenefitIds: [b.id] }, 'test');
+    deleteBenefit(b.id, 'hr');
+    // The stale excluded id is simply ignored — reset recomputes cleanly with
+    // no benefit line at all.
+    const reset = resetPayslipToDefaults(run.id, emp1.id, 'test')!;
+    expect(reset.benefits).toBeUndefined();
+    expect(reset.benefitReimbursements).toBeUndefined();
   });
 });

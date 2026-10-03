@@ -18,11 +18,12 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   BadgeCheck, Car, CircleParking, Dumbbell, GraduationCap, HeartPulse,
   Home, Info, Layers, Pencil, Plus, Power, PowerOff, ShieldCheck, Square,
-  SquarePlus, Stethoscope, type LucideIcon,
+  SquarePlus, Stethoscope, Trash2, type LucideIcon,
 } from 'lucide-react';
 import {
   BENEFIT_CATEGORY_KIND_LABELS, BENEFIT_TREATMENT_ADVICE, BENEFIT_TREATMENT_LABELS,
-  CATEGORY_PRESET_KEYS, benefitSummary, createBenefit, createBenefitCategory, endBenefit,
+  CATEGORY_PRESET_KEYS, benefitSummary, createBenefit, createBenefitCategory, deleteBenefit,
+  deleteBenefitCategory, endBenefit,
   getBenefitCategories, suggestCategoryAdvice, updateBenefit, updateBenefitCategory,
   type BenefitCategory, type BenefitCategoryKind, type BenefitInput, type RecurringBenefit,
 } from '@/lib/benefits';
@@ -35,6 +36,10 @@ import { monthLabel } from '@/pages/payroll/helpers';
 import { Money } from '@/pages/payroll/components';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
@@ -96,6 +101,29 @@ export default function BenefitsTab({ isHR, ownEmployeeId, employees }: Props) {
   const [editing, setEditing] = useState<RecurringBenefit | null>(null);
   const [catDialogOpen, setCatDialogOpen] = useState(false);
   const [editingCat, setEditingCat] = useState<BenefitCategory | null>(null);
+  const [deleting, setDeleting] = useState<RecurringBenefit | null>(null);
+  const [deletingCat, setDeletingCat] = useState<BenefitCategory | null>(null);
+
+  function confirmDeleteBenefit(): void {
+    if (!deleting) return;
+    deleteBenefit(deleting.id, actor);
+    toastSuccess(`${deleting.name} deleted`, 'Past payslips keep their history; only future injections stop.');
+    setDeleting(null);
+  }
+
+  function confirmDeleteCategory(): void {
+    if (!deletingCat) return;
+    try {
+      deleteBenefitCategory(deletingCat.id, actor);
+      toastSuccess(`${deletingCat.name} deleted`);
+      setDeletingCat(null);
+    } catch (err) {
+      // Guard: seeded defaults or referenced categories cannot be deleted —
+      // the card's deactivate button is the offered alternative.
+      toastError('Could not delete category — deactivate it instead', err);
+      setDeletingCat(null);
+    }
+  }
 
   // Seed the statutory-default category catalog on first access (per tenant,
   // idempotent). The write notifies this same subscription, so the cards
@@ -292,6 +320,15 @@ export default function BenefitsTab({ isHR, ownEmployeeId, employees }: Props) {
                           >
                             {c.active ? <PowerOff className="h-4 w-4" /> : <Power className="h-4 w-4" />}
                           </Button>
+                          {c.custom && (
+                            <Button
+                              variant="ghost" size="icon" aria-label={`Delete category ${c.name}`}
+                              className="text-destructive hover:text-destructive"
+                              onClick={() => setDeletingCat(c)}
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          )}
                         </div>
                       </div>
                     </div>
@@ -396,6 +433,13 @@ export default function BenefitsTab({ isHR, ownEmployeeId, employees }: Props) {
                               <Square className="h-4 w-4" />
                             </Button>
                           )}
+                          <Button
+                            variant="ghost" size="icon" aria-label={`Delete ${b.name}`}
+                            className="text-destructive hover:text-destructive"
+                            onClick={() => setDeleting(b)}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
                         </div>
                       </TableCell>
                     )}
@@ -425,6 +469,54 @@ export default function BenefitsTab({ isHR, ownEmployeeId, employees }: Props) {
           editing={editingCat}
           actor={actor}
         />
+      )}
+
+      {/* Destructive confirms (HR only) */}
+      {isHR && (
+        <AlertDialog open={deleting !== null} onOpenChange={(o) => { if (!o) setDeleting(null); }}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Delete benefit — {deleting?.name}?</AlertDialogTitle>
+              <AlertDialogDescription>
+                This permanently removes the assignment. Past payslips keep their history
+                (they are snapshots); only future payroll injections stop. To keep a history
+                row here instead, use End or Cancel.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Keep benefit</AlertDialogCancel>
+              <AlertDialogAction
+                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                onClick={confirmDeleteBenefit}
+              >
+                Delete permanently
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      )}
+
+      {isHR && (
+        <AlertDialog open={deletingCat !== null} onOpenChange={(o) => { if (!o) setDeletingCat(null); }}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Delete category — {deletingCat?.name}?</AlertDialogTitle>
+              <AlertDialogDescription>
+                Only possible while no benefit assignment uses this category; otherwise it is
+                deactivated instead. Seeded statutory defaults can only be deactivated.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Keep category</AlertDialogCancel>
+              <AlertDialogAction
+                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                onClick={confirmDeleteCategory}
+              >
+                Delete category
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       )}
     </div>
   );
@@ -496,18 +588,22 @@ function AssignBenefitDialog({ open, onOpenChange, employees, categories, editin
   function submit(): void {
     try {
       const benefitKey = (category && CATEGORY_PRESET_KEYS[category.id]) || 'custom';
+      // Explicit clear semantics (edit path): empty name reverts to the
+      // preset/category default, empty endMonth removes the end date, empty
+      // notes clears them, and switching to monthly drops annualMonth — the
+      // lib treats '' as a CLEAR signal while omitted keys stay untouched.
       const input: BenefitInput = {
         employeeId,
         benefitKey,
         categoryId,
-        ...(name.trim() ? { name: name.trim() } : {}),
+        name: name.trim(),
         amount: Number(amount),
         frequency,
-        ...(frequency === 'annual' ? { annualMonth: Number(annualMonth) } : {}),
+        annualMonth: Number(annualMonth),
         treatment,
         startMonth,
-        ...(endMonth ? { endMonth } : {}),
-        ...(notes.trim() ? { notes: notes.trim() } : {}),
+        endMonth,
+        notes: notes.trim(),
       };
       if (editing) {
         updateBenefit(editing.id, input, actor);

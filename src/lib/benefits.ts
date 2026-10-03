@@ -447,6 +447,37 @@ export function updateBenefitCategory(
   return merged;
 }
 
+/**
+ * Hard-delete a CUSTOM benefit category. Seeded statutory defaults can only
+ * be deactivated (throws). Blocked while ANY benefit assignment references
+ * the category (any status — assignments must keep resolving their category)
+ * — the caller should offer deactivation instead. Audited.
+ */
+export function deleteBenefitCategory(id: string, actor = 'system'): boolean {
+  const current = benefitCategory(id);
+  if (!current) return false;
+  if (!current.custom) {
+    throw new Error(
+      `'${current.name}' is a statutory default category — deactivate it instead of deleting.`,
+    );
+  }
+  const referencing = getBenefits().filter((b) => b.categoryId === id);
+  if (referencing.length > 0) {
+    throw new Error(
+      `'${current.name}' is used by ${referencing.length} benefit assignment${referencing.length === 1 ? '' : 's'} — reassign or delete those first, or deactivate the category.`,
+    );
+  }
+  saveBenefitCategories(getBenefitCategories().filter((c) => c.id !== id));
+  logAudit({
+    actorName: actor,
+    action: 'benefitCategories.delete',
+    entity: BENEFIT_CATEGORIES_COLLECTION,
+    entityId: id,
+    detail: `${current.name} (${current.kind}) custom category hard-deleted`,
+  });
+  return true;
+}
+
 /* ────────────────────────────────────────────────────────────
  * Store helpers
  * ──────────────────────────────────────────────────────────── */
@@ -497,7 +528,8 @@ function validateBenefit(input: BenefitInput, treatment: BenefitTreatment, name:
   if (!/^\d{4}-\d{2}$/.test(input.startMonth)) {
     throw new Error('Start month must be YYYY-MM.');
   }
-  if (input.endMonth !== undefined) {
+  // '' is the explicit CLEAR signal (edit path) — only validate real values.
+  if (input.endMonth !== undefined && input.endMonth !== '') {
     if (!/^\d{4}-\d{2}$/.test(input.endMonth)) throw new Error('End month must be YYYY-MM.');
     if (input.endMonth < input.startMonth) throw new Error('End month cannot be before the start month.');
   }
@@ -563,14 +595,17 @@ export function createBenefit(input: BenefitInput, actor = 'system'): RecurringB
   return benefit;
 }
 
-/** Edit a benefit's commercial fields (amount/frequency/period/treatment/category). */
+/** Edit a benefit's commercial fields (amount/frequency/period/treatment/category).
+ *  Explicit-clear semantics: endMonth '' removes the end date, notes '' clears
+ *  the notes, name '' reverts to the preset label / category name, and
+ *  switching frequency to 'monthly' drops annualMonth. Omitted keys stay
+ *  untouched. */
 export function updateBenefit(id: string, patch: Partial<BenefitInput>, actor = 'system'): RecurringBenefit | null {
   const current = getBenefit(id);
   if (!current) return null;
   const merged: RecurringBenefit = {
     ...current,
     ...(patch.benefitKey !== undefined ? { benefitKey: patch.benefitKey } : {}),
-    ...(patch.name !== undefined ? { name: patch.name.trim() || current.name } : {}),
     ...(patch.amount !== undefined ? { amount: round2(patch.amount) } : {}),
     ...(patch.frequency !== undefined ? { frequency: patch.frequency } : {}),
     ...(patch.treatment !== undefined ? { treatment: patch.treatment } : {}),
@@ -584,6 +619,13 @@ export function updateBenefit(id: string, patch: Partial<BenefitInput>, actor = 
     const resolved = resolveCategoryId(patch.categoryId, patch.benefitKey ?? current.benefitKey);
     if (resolved) merged.categoryId = resolved;
     else delete merged.categoryId;
+  }
+  // Name: '' is an explicit clear — revert to the preset label, then the
+  // category name (createBenefit's fallback chain), then keep the old name.
+  if (patch.name !== undefined) {
+    const preset = merged.benefitKey === CUSTOM_BENEFIT_KEY ? undefined : benefitPreset(merged.benefitKey);
+    const fallback = preset?.label || benefitCategory(merged.categoryId)?.name || current.name;
+    merged.name = patch.name.trim() || fallback;
   }
   // Annual-month coherence after the merge.
   if (merged.frequency === 'annual') {
@@ -641,6 +683,29 @@ export function cancelBenefit(id: string, actor = 'system'): RecurringBenefit | 
     detail: `${current.name} (${current.employeeId}) cancelled`,
   });
   return next;
+}
+
+/**
+ * Hard-delete a benefit assignment (row removed entirely, unlike end/cancel
+ * which keep a history row). Safe because payslips are SNAPSHOTS: computed
+ * runs store their own benefit lines (Payslip.benefits) and payroll derives
+ * injections from this collection at compute time only — the only other
+ * reference is PayslipEditInput.excludeBenefitIds on draft payslips, which
+ * simply filters live benefit ids, so a deleted id is ignored harmlessly.
+ * Past payslips keep their history; only future injections stop. Audited.
+ */
+export function deleteBenefit(id: string, actor = 'system'): boolean {
+  const current = getBenefit(id);
+  if (!current) return false;
+  saveBenefits(getBenefits().filter((b) => b.id !== id));
+  logAudit({
+    actorName: actor,
+    action: 'benefits.delete',
+    entity: BENEFITS_COLLECTION,
+    entityId: id,
+    detail: `${current.name} (${current.employeeId}) hard-deleted — was ${current.status}, RM${current.amount.toFixed(2)} ${current.frequency}`,
+  });
+  return true;
 }
 
 /* ────────────────────────────────────────────────────────────
