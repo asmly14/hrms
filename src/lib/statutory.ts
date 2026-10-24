@@ -56,15 +56,17 @@ const EPF_TABLE_LIMIT = 20000;
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Third-Schedule banded lookup: wages < RM20,000 are snapped UP to the next
- * RM20 band ceiling, the rate is applied to the band ceiling, and the result
- * is rounded UP to the next ringgit (no cents in the Third Schedule).
+ * Third-Schedule banded lookup: wages < RM20,000 are snapped UP to the band
+ * ceiling — RM20 bands up to RM5,000, RM100 bands from RM5,000.01 (e.g.
+ * RM5,000.01–5,100 → 612/561) — the rate is applied to the band ceiling, and
+ * the result is rounded UP to the next ringgit (no cents in the Third Schedule).
  * Source: EPF Act 1991 Third Schedule rounding rule ("rounded up to the next ringgit").
  */
 function epfBanded(wages: number, rate: number): number {
   if (wages <= 0) return 0;
   if (wages >= EPF_TABLE_LIMIT) return Math.ceil(wages * rate);
-  const bandCeiling = Math.ceil(wages / 20) * 20;
+  const bandWidth = wages > 5000 ? 100 : 20;
+  const bandCeiling = Math.ceil(wages / bandWidth) * bandWidth;
   return Math.ceil(bandCeiling * rate - 1e-9);
 }
 

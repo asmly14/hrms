@@ -210,11 +210,35 @@ export interface RunPayrollOptions {
 /** YTD statutory totals shape (recorded payslips, optionally + TP3 carry-in). */
 export interface YtdBasis {
   gross: number;
+  /** PCB-taxable remuneration (pcbRemunerationOf) — the annualization basis, not `gross`. */
+  pcbGross: number;
   epf: number;
   socso: number;  // employee SOCSO + EIS
   pcb: number;
   net: number;
   months: number; // recorded payslip months in the basis (carry-in excluded)
+}
+
+/**
+ * PCB-taxable remuneration a stored payslip contributed (normal + additional):
+ * gross pay, minus cash lines tagged PCB-exempt, plus PCB-taxable non-cash
+ * benefits (BIK) that never join gross. Derived from the stored lines rather
+ * than pcbBase + pcbAdditional, so slips written by the old untagged-line PCB
+ * call (which counted those lines twice) still contribute the right amount.
+ */
+export function pcbRemunerationOf(p: Payslip): number {
+  const earnings = (p.adjustments ?? []).filter(
+    (a) => a.kind === 'earning' && Number.isFinite(a.amount) && a.amount > 0,
+  );
+  const exemptCash = earnings
+    .filter((a) => !a.nonStatutory && !a.nonCash && a.tags && !a.tags.pcb)
+    .reduce((s, a) => s + a.amount, 0);
+  const taxableNonCash = earnings
+    .filter((a) => a.nonCash && a.tags?.pcb)
+    .reduce((s, a) => s + a.amount, 0);
+  // Benefit BIK lines are always PCB-taxable (benefitAsAdjustment); benefit
+  // taxable allowances carry TAGS_ALL and are already in gross.
+  return round2(p.grossPay - exemptCash + taxableNonCash + (p.benefitNonCash ?? 0));
 }
 
 /** YTD statutory totals from stored payslips of the same calendar year, before `month`. */
@@ -225,6 +249,7 @@ export function ytdFor(employeeId: string, month: string): YtdBasis {
   );
   return {
     gross: round2(slips.reduce((s, p) => s + p.grossPay, 0)),
+    pcbGross: round2(slips.reduce((s, p) => s + pcbRemunerationOf(p), 0)),
     epf: round2(slips.reduce((s, p) => s + p.epfEmployee, 0)),
     socso: round2(slips.reduce((s, p) => s + p.socsoEmployee + p.eisEmployee, 0)),
     pcb: round2(slips.reduce((s, p) => s + p.pcb, 0)),
@@ -255,6 +280,7 @@ function withCarryIn(ytd: YtdBasis, carryIn: YTDCarryIn | undefined): YtdBasis {
   if (!carryIn) return ytd;
   return {
     gross: round2(ytd.gross + carryIn.gross),
+    pcbGross: round2(ytd.pcbGross + carryIn.gross),
     epf: round2(ytd.epf + carryIn.epf),
     socso: round2(ytd.socso + carryIn.socso),
     pcb: round2(ytd.pcb + carryIn.pcb),
@@ -273,6 +299,7 @@ function withCarryIn(ytd: YtdBasis, carryIn: YTDCarryIn | undefined): YtdBasis {
 function estimateYtdBasis(
   emp: Employee,
   monthIndex: number,
+  /** Monthly normal PCB remuneration to project (the run's pcbBase; package gross in ytdForPcb). */
   grossPay: number,
   epfEE: number,
   socsoEE: number,
@@ -291,6 +318,7 @@ function estimateYtdBasis(
   const taxEst = annualTax(Math.max(0, estGross + grossPay * n - epfRelief - socsoRelief - personal));
   return {
     gross: estGross,
+    pcbGross: estGross,
     epf: estEpf,
     socso: estSocso,
     pcb: round2((taxEst * m1) / 12),
@@ -597,11 +625,30 @@ function computePayslip(emp: Employee, ctx: PayslipCtx, edit: PayslipEditInput =
     ? { employee: 0, employer: 0 }
     : calcEIS(eisBase, age, !emp.isForeignWorker);
 
+  // ── PCB base ──
+  // Accumulated per line: normal remuneration = basic + allowances + OT +
+  // pcb-tagged normal lines + non-cash BIK (TP2); additional remuneration
+  // (bonus/commission/director fees + legacy untagged lines) is taxed via the
+  // aggregate delta. Untagged lines are additional remuneration ONLY — they
+  // must not also be annualized as normal pay (the old no-tagged-lines path
+  // passed the whole gross as normal and taxed those lines twice).
+  const pcbBase = round2(
+    basicPay + allowanceTotal + otPay +
+    taggedSum((a) => a.tags!.pcb && !a.additionalRemuneration) +
+    round2([...earningLines, ...benefitLines].filter((a) => a.nonCash && a.tags?.pcb).reduce((s, a) => s + a.amount, 0)),
+  );
+  const pcbAdditional = round2(
+    taggedSum((a) => a.tags!.pcb && a.additionalRemuneration === true) + untaggedTotal,
+  );
+
   // ── YTD basis for PCB annualization ──
   // Recorded payslips + TP3 carry-in (real prior-employer figures — QA
-  // employees C-1). The year-continuity estimate applies ONLY when there is
-  // no carry-in AND the employee joined before this calendar year; a genuine
-  // mid-year hire (joinDate in this year, no TP3) has a true zero YTD.
+  // employees C-1), on PCB-taxable remuneration (pcbGross: BIK in, PCB-exempt
+  // lines out) so it matches the current month's base. The year-continuity
+  // estimate applies ONLY when there is no carry-in AND the employee joined
+  // before this calendar year; a genuine mid-year hire (joinDate in this
+  // year, no TP3) has a true zero YTD. It projects this month's NORMAL
+  // remuneration back to January — never this month's additional remuneration.
   const recordedYtd = ytdFor(emp.id, month);
   const carryIn = carryInForYear(emp, Number(month.slice(0, 4)));
   const ytdBase = withCarryIn(recordedYtd, carryIn);
@@ -613,38 +660,13 @@ function computePayslip(emp: Employee, ctx: PayslipCtx, edit: PayslipEditInput =
     !emp.joinDate.startsWith(month.slice(0, 4))
   ) {
     pcbBasis = estimateYtdBasis(
-      emp, monthIndex, grossPay, epf.employee, round2(socso.employee + eis.employee),
+      emp, monthIndex, pcbBase, epf.employee, round2(socso.employee + eis.employee),
     );
   }
 
-  // ── PCB base ──
-  // With NO tagged lines anywhere, reproduce the legacy call exactly
-  // (annualized on the gross; all adjustment earnings as additional
-  // remuneration) so pre-tag figures never drift. Otherwise accumulate per
-  // line: normal remuneration = basic + allowances + OT + pcb-tagged normal
-  // lines + non-cash BIK (TP2); additional remuneration (bonus/commission/
-  // director fees + legacy untagged lines) taxed via the aggregate delta.
-  const hasTaggedLines =
-    tagged.length > 0 ||
-    [...earningLines, ...benefitLines].some((a) => a.nonCash && a.tags);
-  let pcbBase: number;
-  let pcbAdditional: number;
-  if (hasTaggedLines) {
-    pcbBase = round2(
-      basicPay + allowanceTotal + otPay +
-      taggedSum((a) => a.tags!.pcb && !a.additionalRemuneration) +
-      round2([...earningLines, ...benefitLines].filter((a) => a.nonCash && a.tags?.pcb).reduce((s, a) => s + a.amount, 0)),
-    );
-    pcbAdditional = round2(
-      taggedSum((a) => a.tags!.pcb && a.additionalRemuneration === true) + untaggedTotal,
-    );
-  } else {
-    pcbBase = grossPay;
-    pcbAdditional = adjustmentEarnings;
-  }
   const pcb = excludePcb
     ? 0
-    : calcPCB(hasTaggedLines ? pcbBase : grossPay, pcbBasis, {
+    : calcPCB(pcbBase, { ...pcbBasis, gross: pcbBasis.pcbGross }, {
         marital: emp.maritalStatus,
         children: emp.children,
         monthIndex,
