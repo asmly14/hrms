@@ -72,9 +72,18 @@ departmentProfiles` (`holidays` is national/global).
 
 | Role | Read | Write |
 |---|---|---|
-| Admin / HR / SuperAdmin | whole company | whole company |
-| Manager | own department (employee-linked collections); company-wide reference data | employee-linked rows in own department only |
-| Employee | own records only | create/patch own rows on self-service collections (`leaves, claims, attendance, objectives, checkins`); no deletes |
+| Admin / HR / SuperAdmin | whole company | whole company (`holidays`: SuperAdmin only — it is shared by every tenant) |
+| Manager | own department (employee-linked collections); company-wide reference data | other employees' rows in own department on `attendance, leaves, leaveBalances, claims, kpis, reviews, objectives, checkins, pips` (never `payslips`); own rows follow the Employee rules |
+| Employee | own records only | create/patch own rows on self-service collections (`leaves, claims, attendance, objectives, checkins, reviews`); no deletes |
+
+Self-service writes cannot carry an approver's decision
+(`src/db/writePolicy.ts`): leave is applied as `pending` and only editable or
+withdrawable while pending; claims are saved as `draft`/`submitted` and lock
+once approved; OT cannot be self-approved and approved OT is frozen; on their
+own review a user may only self-assess (draft) or acknowledge (submitted).
+No restricted user can re-point an existing row at another employee — `POST`
+with an existing `id` is authorised against the stored row, like `PATCH`.
+Run `npm test` for the rule suite.
 
 ## Data migration from the browser app
 

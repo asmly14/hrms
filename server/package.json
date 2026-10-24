@@ -12,6 +12,7 @@
     "build": "tsc",
     "start": "node dist/src/index.js",
     "typecheck": "tsc --noEmit",
+    "test": "tsx --test test/*.test.ts",
     "seed": "tsx src/seed.ts",
     "migrate": "tsx scripts/migrate-from-browser.ts",
     "sync-calc": "node scripts/sync-calc.mjs"

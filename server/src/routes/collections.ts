@@ -17,6 +17,7 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import {
   HttpError,
+  assertCollectionWritable,
   assertWriteAllowed,
   collectionDef,
   deleteDoc,
@@ -94,13 +95,19 @@ export default async function collectionRoutes(app: FastifyInstance): Promise<vo
       if (!def.global && !companyId) throw new HttpError(400, 'SuperAdmin must pass ?companyId= for tenant collections.');
       const doc = (req.body ?? {}) as Record<string, unknown>;
       if (typeof doc !== 'object' || Array.isArray(doc)) throw new HttpError(400, 'Body must be a JSON object.');
-      await assertWriteAllowed(user, def, companyId ?? '', doc);
+      if (doc.id !== undefined && (typeof doc.id !== 'string' || !doc.id)) {
+        throw new HttpError(400, 'id must be a non-empty string when provided.');
+      }
+      // POST upserts: an id that already exists overwrites that row, so it is
+      // authorised against the stored row exactly like a PATCH.
+      const existing = doc.id ? await getDoc(def, companyId, doc.id as string) : undefined;
+      await assertWriteAllowed(user, def, companyId ?? '', doc, existing);
       const stored = await upsertDoc(def, companyId, doc);
       await insertAudit({
         companyId: companyId ?? null,
         actorId: user.userId,
         actorName: user.username,
-        action: `${collection}.create`,
+        action: `${collection}.${existing ? 'update' : 'create'}`,
         entity: collection,
         entityId: stored.id as string,
       });
@@ -122,7 +129,7 @@ export default async function collectionRoutes(app: FastifyInstance): Promise<vo
       if (!existing) throw new HttpError(404, 'Record not found.');
       const patch = (req.body ?? {}) as Record<string, unknown>;
       const merged = { ...existing, ...patch, id };
-      await assertWriteAllowed(user, def, companyId ?? '', merged);
+      await assertWriteAllowed(user, def, companyId ?? '', merged, existing);
       const stored = await upsertDoc(def, companyId, merged);
       await insertAudit({
         companyId: companyId ?? null,
@@ -148,6 +155,7 @@ export default async function collectionRoutes(app: FastifyInstance): Promise<vo
       if (user.role !== 'Admin' && user.role !== 'HR' && user.role !== 'SuperAdmin') {
         throw new HttpError(403, 'Only Admin/HR can replace an entire collection.');
       }
+      assertCollectionWritable(user, def);
       const companyId = resolveCompanyScope(user, requestedCompany(req));
       if (!def.global && !companyId) throw new HttpError(400, 'SuperAdmin must pass ?companyId= for tenant collections.');
       const docs = req.body as Record<string, unknown>[];
@@ -179,6 +187,7 @@ export default async function collectionRoutes(app: FastifyInstance): Promise<vo
       if (user.role !== 'Admin' && user.role !== 'HR' && user.role !== 'SuperAdmin') {
         throw new HttpError(403, 'Only Admin/HR can delete records.');
       }
+      assertCollectionWritable(user, def);
       const companyId = resolveCompanyScope(user, requestedCompany(req));
       if (!def.global && !companyId) throw new HttpError(400, 'SuperAdmin must pass ?companyId= for tenant collections.');
       const removed = await deleteDoc(def, companyId, id);
