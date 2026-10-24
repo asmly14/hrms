@@ -7,7 +7,7 @@ import {
 
 // Researched anchors: docs/research/statutory-rates.md
 // EPF Third Schedule: 11% employee; employer 13% (≤RM5,000) / 12% (>RM5,000),
-// banded to RM20 and rounded UP to the next ringgit.
+// banded to RM20 up to RM5,000 and RM100 above, rounded UP to the next ringgit.
 
 describe('calcEPF — Third Schedule anchors', () => {
   it('RM3,000 wages → employee 330 / employer 390 (13%)', () => {
@@ -20,8 +20,19 @@ describe('calcEPF — Third Schedule anchors', () => {
 
   it('employer rate switches at exactly RM5,000 boundary', () => {
     expect(calcEPF(5000, 30, true, false).employer).toBe(650); // 13%
-    // 5,000.01 > 5,000 → 12% on band ceiling 5,020 = 602.40 → round up 603
-    expect(calcEPF(5000.01, 30, true, false).employer).toBe(603);
+    // 5,000.01 > 5,000 → 12% on the RM5,000.01–5,100 band ceiling = 612
+    expect(calcEPF(5000.01, 30, true, false)).toEqual({ employee: 561, employer: 612 });
+  });
+
+  it('bands widen to RM100 above RM5,000 (up to the RM20,000 table limit)', () => {
+    expect(calcEPF(5050, 30, true, false)).toEqual({ employee: 561, employer: 612 });
+    expect(calcEPF(5100, 30, true, false)).toEqual({ employee: 561, employer: 612 });
+    // 5,100.01 → next band, ceiling 5,200
+    expect(calcEPF(5100.01, 30, true, false)).toEqual({ employee: 572, employer: 624 });
+    expect(calcEPF(9950, 30, true, false)).toEqual({ employee: 1100, employer: 1200 });
+    expect(calcEPF(19950, 30, true, false)).toEqual({ employee: 2200, employer: 2400 });
+    // RM20,000+ → exact percentage, rounded up
+    expect(calcEPF(20050, 30, true, false)).toEqual({ employee: 2206, employer: 2406 });
   });
 
   it('age 60+ citizen → employee 0 / employer 4%', () => {

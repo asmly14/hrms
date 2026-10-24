@@ -11,14 +11,15 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { installLocalStorage } from './storageStub';
 import { getCollection, saveCompanies, setCollection } from '../db';
 import {
-  previewPayslip, runPayroll, setPayslipAdjustments, updateDraftPayslip,
-  workedDaysInPeriod, workedHoursInPeriod, payrollPeriodFor,
+  pcbRemunerationOf, previewPayslip, runPayroll, setPayslipAdjustments, updateDraftPayslip,
+  workedDaysInPeriod, workedHoursInPeriod, payrollPeriodFor, ytdFor,
 } from '../payrollEngine';
+import { createBenefit } from '../benefits';
 import { calcEPF, calcSOCSO, calcEIS, calcPCB, calcOT } from '../statutory';
 import { PAY_ITEM_PRESETS, newEarningFromPreset, payItemPreset } from '../payItems';
 import { round2 } from '../utils';
 import type {
-  AttendanceRecord, Company, Employee, PayslipAdjustment, PayslipEditInput,
+  AttendanceRecord, Company, Employee, Payslip, PayslipAdjustment, PayslipEditInput,
   Settings, WageBaseTags,
 } from '../types';
 
@@ -399,7 +400,7 @@ describe('per-line statutory wage-base tags', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe('backward compatibility — untagged adjustment lines', () => {
-  it('legacy behaviour preserved: SOCSO/EIS ✓, EPF ✗, PCB via the legacy gross-inclusive bonus path', () => {
+  it('legacy wage bases preserved (SOCSO/EIS ✓, EPF ✗); PCB taxes the line once, as additional remuneration', () => {
     // Mid-year-2026 hire → true zero YTD basis, so the exact legacy PCB is reproducible.
     seed([mkEmp('e-1', { joinDate: '2026-01-05' })]);
     const { run, payslips } = runPayroll(MONTH, undefined, 'hr-admin', { draft: true });
@@ -418,9 +419,10 @@ describe('backward compatibility — untagged adjustment lines', () => {
     expect(p.eisBase).toBe(3500);
     expect(p.socsoEmployee).toBe(calcSOCSO(3500, 36).employee);
     expect(p.eisEmployee).toBe(calcEIS(3500, 36, true).employee);
-    // Exact legacy PCB: annualized on the gross AND the full 500 again as the
-    // bonus delta (the pinned pre-tag behaviour — see git history).
-    const expectedPcb = calcPCB(3500, { gross: 0, epf: 0, socso: 0, pcb: 0 }, {
+    // Normal remuneration (3000) is annualized; the untagged 500 is taxed only
+    // via the bonus delta. (Pre-fix, the 500 was ALSO annualized inside a
+    // 3500 normal base — counted twice.)
+    const expectedPcb = calcPCB(3000, { gross: 0, epf: 0, socso: 0, pcb: 0 }, {
       marital: 'single',
       children: 0,
       monthIndex: 3,
@@ -429,7 +431,7 @@ describe('backward compatibility — untagged adjustment lines', () => {
       socsoEmployee: round2(p.socsoEmployee + p.eisEmployee),
     });
     expect(p.pcb).toBe(expectedPcb);
-    expect(p.pcbBase).toBe(3500);
+    expect(p.pcbBase).toBe(3000);
     expect(p.pcbAdditional).toBe(500);
     // Net identity intact.
     expect(p.netPay).toBe(round2(p.grossPay - p.epfEmployee - p.socsoEmployee - p.eisEmployee - p.pcb));
@@ -599,5 +601,63 @@ describe('pay-items catalog — statutory-rates.md §6 matrix', () => {
     const custom = newEarningFromPreset(undefined, 'Arrears', 250);
     expect(custom.tags).toBeUndefined();
     expect(custom.amount).toBe(250);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PCB year-to-date basis — PCB-taxable remuneration, not gross
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('PCB YTD basis uses PCB-taxable remuneration', () => {
+  const YEAR_MONTHS = Array.from({ length: 12 }, (_, i) => `2026-${String(i + 1).padStart(2, '0')}`);
+
+  it('a monthly non-cash BIK is taxed every month, not just in the first', () => {
+    // RM8,000 + RM1,000/mo BIK has the same chargeable income as a RM9,000
+    // cash salary (EPF and SOCSO/EIS reliefs hit their caps either way), so
+    // the two must withhold identical PCB every month. Pre-fix, BIK was left
+    // out of YTD and the BIK employee's PCB decayed from 698.63 to 124.85.
+    seed([
+      mkEmp('e-bik', { baseSalary: 8000, joinDate: '2025-06-01' }),
+      mkEmp('e-cash', { baseSalary: 9000, joinDate: '2025-06-01' }),
+    ]);
+    createBenefit(
+      { employeeId: 'e-bik', benefitKey: 'group-insurance', amount: 1000, frequency: 'monthly', startMonth: '2026-01' },
+      'hr',
+    );
+    for (const month of YEAR_MONTHS) {
+      const { payslips } = runPayroll(month, undefined, 'hr-admin');
+      const bik = payslips.find((p) => p.employeeId === 'e-bik')!;
+      const cash = payslips.find((p) => p.employeeId === 'e-cash')!;
+      expect(bik.grossPay).toBe(8000); // BIK never joins gross…
+      expect(bik.pcbBase).toBe(9000); // …but is normal remuneration for PCB
+      expect(pcbRemunerationOf(bik)).toBe(round2((bik.pcbBase ?? 0) + (bik.pcbAdditional ?? 0)));
+      expect(bik.pcb, month).toBe(cash.pcb);
+    }
+    expect(ytdFor('e-bik', '2027-01').pcb).toBe(ytdFor('e-cash', '2027-01').pcb);
+  });
+
+  it('a PCB-exempt line keeps PCB flat instead of creeping up via YTD', () => {
+    seed([mkEmp('e-1', { baseSalary: 6000, joinDate: '2025-06-01' })]);
+    const exempt: PayslipAdjustment = {
+      id: 'x1', kind: 'earning', preset: 'custom', label: 'PCB-exempt allowance', amount: 2000,
+      tags: { epf: true, socso: true, eis: true, pcb: false },
+    };
+    const pcbs = ['2026-01', '2026-02', '2026-03'].map((month) => {
+      const { run } = runPayroll(month, undefined, 'hr-admin', { draft: true });
+      return setPayslipAdjustments(run.id, 'e-1', [exempt], 'hr-admin')!.pcb;
+    });
+    // Pre-fix: 204.29 → 224.29 → 246.29 (the exempt 2,000 leaked into YTD).
+    expect(pcbs[1]).toBe(pcbs[0]);
+    expect(pcbs[2]).toBe(pcbs[0]);
+  });
+
+  it('a slip written by the old double-counting PCB call contributes its gross once', () => {
+    const legacySlip = {
+      grossPay: 3500,
+      pcbBase: 3500, // old untagged path stored the whole gross as normal…
+      pcbAdditional: 500, // …and the same 500 again as additional
+      adjustments: [{ id: 'a1', kind: 'earning', preset: 'custom', label: 'Commission', amount: 500 }],
+    } as unknown as Payslip;
+    expect(pcbRemunerationOf(legacySlip)).toBe(3500);
   });
 });
