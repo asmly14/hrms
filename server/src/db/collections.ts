@@ -9,6 +9,14 @@
 import type { Queryable } from './pool';
 import { pool } from './pool';
 import { uid } from '../calc/utils';
+import {
+  attendanceSelfPolicy,
+  checkinSelfPolicy,
+  claimSelfPolicy,
+  leaveSelfPolicy,
+  reviewSelfPolicy,
+  type SelfWritePolicy,
+} from './writePolicy';
 
 export type Role = 'Admin' | 'HR' | 'Manager' | 'Employee' | 'SuperAdmin';
 
@@ -26,9 +34,13 @@ export interface CollectionDef {
   table: string;
   /** Rows carry employee_id → role scoping applies (Manager dept / Employee self). */
   employeeLinked?: boolean;
-  /** Employee role may CREATE/PATCH rows tied to their own employeeId only. */
+  /** Users may CREATE/PATCH rows about themselves (Employee, or a Manager on their own row). */
   selfService?: boolean;
-  /** Global (national) collection — no tenant scope (holidays). */
+  /** Field rules for self-service writes (no self-approval) — see writePolicy.ts. */
+  selfPolicy?: SelfWritePolicy;
+  /** Managers may write rows of OTHER employees in their department (approvals, reviews). */
+  managerWrites?: boolean;
+  /** Global (national) collection — no tenant scope (holidays). SuperAdmin-only writes. */
   global?: boolean;
   /** Extra columns extracted from the JSON doc at write time. */
   extract?: (doc: Record<string, unknown>) => Record<string, unknown>;
@@ -55,23 +67,31 @@ export const COLLECTIONS: Record<string, CollectionDef> = {
     table: 'attendance',
     employeeLinked: true,
     selfService: true,
+    selfPolicy: attendanceSelfPolicy,
+    managerWrites: true,
     extract: (d) => ({ ...empId(d), date: (d.date as string) ?? null }),
   },
   leaves: {
     table: 'leaves',
     employeeLinked: true,
     selfService: true,
+    selfPolicy: leaveSelfPolicy,
+    managerWrites: true,
     extract: (d) => ({ ...empId(d), status: (d.status as string) ?? null }),
   },
   leaveBalances: {
     table: 'leave_balances',
     employeeLinked: true,
+    // Leave approval (web: ApprovalsQueue) deducts the balance in the same step.
+    managerWrites: true,
     extract: (d) => ({ ...empId(d), year: Number.isFinite(Number(d.year)) ? Number(d.year) : null }),
   },
   claims: {
     table: 'claims',
     employeeLinked: true,
     selfService: true,
+    selfPolicy: claimSelfPolicy,
+    managerWrites: true,
     extract: (d) => ({ ...empId(d), status: (d.status as string) ?? null }),
   },
   payrollRuns: {
@@ -79,6 +99,7 @@ export const COLLECTIONS: Record<string, CollectionDef> = {
     extract: (d) => ({ month_key: (d.monthKey as string) ?? null }),
   },
   payslips: {
+    // No managerWrites: payslips are produced by /api/payroll (Admin/HR) only.
     table: 'payslips',
     employeeLinked: true,
     extract: (d) => ({
@@ -87,12 +108,27 @@ export const COLLECTIONS: Record<string, CollectionDef> = {
       month_key: (d.monthKey as string) ?? null,
     }),
   },
-  kpis: { table: 'kpis', employeeLinked: true, extract: empId },
-  reviews: { table: 'reviews', employeeLinked: true, extract: empId },
+  kpis: { table: 'kpis', employeeLinked: true, managerWrites: true, extract: empId },
+  reviews: {
+    table: 'reviews',
+    employeeLinked: true,
+    // Self-service = self-assessment + acknowledgement only (reviewSelfPolicy).
+    selfService: true,
+    selfPolicy: reviewSelfPolicy,
+    managerWrites: true,
+    extract: empId,
+  },
   cycles: { table: 'cycles' },
-  objectives: { table: 'objectives', employeeLinked: true, selfService: true, extract: empId },
-  checkins: { table: 'checkins', employeeLinked: true, selfService: true, extract: empId },
-  pips: { table: 'pips', employeeLinked: true, extract: empId },
+  objectives: { table: 'objectives', employeeLinked: true, selfService: true, managerWrites: true, extract: empId },
+  checkins: {
+    table: 'checkins',
+    employeeLinked: true,
+    selfService: true,
+    selfPolicy: checkinSelfPolicy,
+    managerWrites: true,
+    extract: empId,
+  },
+  pips: { table: 'pips', employeeLinked: true, managerWrites: true, extract: empId },
   holidays: { table: 'holidays', global: true, extract: (d) => ({ date: (d.date as string) ?? null }) },
   settings: { table: 'settings' },
   positionProfiles: {
@@ -207,43 +243,74 @@ export async function visibilityFilter(
 }
 
 /**
- * May `user` WRITE a doc belonging to `targetEmployeeId` (undefined = doc has
- * no employee link)? Mirrors read scoping, stricter: Employee writes are only
- * allowed on selfService collections for their own rows; Manager only within
- * their department on employee-linked collections; non-linked collections are
- * Admin/HR/SuperAdmin-only.
+ * Global (national) collections are shared by every tenant — a company
+ * Admin/HR writing them would change every other company's calendar.
+ */
+export function assertCollectionWritable(user: JwtUser, def: CollectionDef): void {
+  if (def.global && user.role !== 'SuperAdmin') {
+    throw new HttpError(403, 'National holidays apply to every company — only the platform SuperAdmin can change them.');
+  }
+}
+
+const employeeIdOf = (d: Record<string, unknown> | undefined) => (d?.employeeId as string | null | undefined) ?? undefined;
+
+/**
+ * May `user` WRITE `doc` (as it would be stored)? `existing` is the stored row
+ * when the write updates one (PATCH, or POST with an existing id). Mirrors
+ * read scoping, stricter:
+ *  - global collections: SuperAdmin only;
+ *  - Admin/HR/SuperAdmin: anything in the company;
+ *  - restricted roles may never re-point an existing row at another employee
+ *    (that would take over someone else's record);
+ *  - a row about YOURSELF follows the self-service rules whatever your role —
+ *    selfService collections only, and their selfPolicy forbids carrying an
+ *    approver's decision (so neither an Employee nor a Manager can approve
+ *    their own leave/claims/OT or edit their own payslip or balance);
+ *  - Manager: other employees' rows in their department, on managerWrites
+ *    collections only; non-linked collections are Admin/HR/SuperAdmin-only.
  */
 export async function assertWriteAllowed(
   user: JwtUser,
   def: CollectionDef,
   companyId: string,
   doc: Record<string, unknown>,
+  existing?: Record<string, unknown>,
   db: Queryable = pool,
 ): Promise<void> {
+  assertCollectionWritable(user, def);
   if (user.role === 'Admin' || user.role === 'HR' || user.role === 'SuperAdmin') return;
-  const docEmployeeId = (doc.employeeId as string | undefined) ?? undefined;
+  if (user.role !== 'Employee' && user.role !== 'Manager') throw new HttpError(403, 'Unknown role.');
+  const docEmployeeId = employeeIdOf(doc);
+
+  if (existing && employeeIdOf(existing) !== docEmployeeId) {
+    throw new HttpError(403, 'A record cannot be moved to another employee.');
+  }
+
+  if (user.employeeId && docEmployeeId === user.employeeId) {
+    if (!def.selfService) {
+      throw new HttpError(403, 'This record is about you — only HR or an Admin can change it.');
+    }
+    const reason = def.selfPolicy?.(existing, doc) ?? null;
+    if (reason) throw new HttpError(403, reason);
+    return;
+  }
 
   if (user.role === 'Employee') {
     if (!def.selfService) throw new HttpError(403, 'Employees cannot write this collection.');
-    if (!user.employeeId || docEmployeeId !== user.employeeId) {
-      throw new HttpError(403, 'Employees can only modify their own records.');
-    }
-    return;
+    throw new HttpError(403, 'Employees can only modify their own records.');
   }
-  if (user.role === 'Manager') {
-    if (!def.employeeLinked) throw new HttpError(403, 'Managers cannot write this collection.');
-    const dept = await managerDepartmentId(user, db);
-    if (!dept) throw new HttpError(403, 'Manager account is not linked to an employee record.');
-    // Writing a doc with no employee link (company-level) is Admin/HR-only.
-    if (!docEmployeeId) throw new HttpError(403, 'Managers cannot write company-level records.');
-    const r = await db.query<{ ok: boolean }>(
-      'SELECT EXISTS(SELECT 1 FROM employees WHERE company_id = $1 AND id = $2 AND department_id = $3) AS ok',
-      [companyId, docEmployeeId, dept],
-    );
-    if (!r.rows[0]?.ok) throw new HttpError(403, 'Record is outside your department.');
-    return;
-  }
-  throw new HttpError(403, 'Unknown role.');
+
+  // Manager, on someone else's row.
+  if (!def.managerWrites) throw new HttpError(403, 'Managers cannot write this collection.');
+  const dept = await managerDepartmentId(user, db);
+  if (!dept) throw new HttpError(403, 'Manager account is not linked to an employee record.');
+  // Writing a doc with no employee link (company-level) is Admin/HR-only.
+  if (!docEmployeeId) throw new HttpError(403, 'Managers cannot write company-level records.');
+  const r = await db.query<{ ok: boolean }>(
+    'SELECT EXISTS(SELECT 1 FROM employees WHERE company_id = $1 AND id = $2 AND department_id = $3) AS ok',
+    [companyId, docEmployeeId, dept],
+  );
+  if (!r.rows[0]?.ok) throw new HttpError(403, 'Record is outside your department.');
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
